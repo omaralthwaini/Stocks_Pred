@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 def run_strategy(df):
     df = df.copy()

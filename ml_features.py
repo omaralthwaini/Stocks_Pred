@@ -1,3 +1,6 @@
+import pandas as pd
+import numpy as np
+
 def build_ml_dataset(combined, trades):
     rows = []
     combined = combined.sort_values(["symbol", "date"])
