@@ -1,5 +1,7 @@
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
+import numpy as np
+
 
 def load_model_and_predict(ml_df, model):
     df = ml_df[ml_df["days_before_entry"] == 0].copy()

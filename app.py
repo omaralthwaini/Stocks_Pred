@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import joblib
+import numpy as np
 from strategy import run_strategy
 from ml_features import build_ml_dataset
 from model_loader import load_model_and_predict
