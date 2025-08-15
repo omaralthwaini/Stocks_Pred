@@ -30,34 +30,41 @@ with st.spinner("⏳ Running strategy and predicting exit prices..."):
     else:
         st.success(f"✅ {len(trades)} trades detected")
 
-        # Build full ML dataset (historical + open)
+        # Build full ML dataset (includes both open + closed trades)
         ml_df = build_ml_dataset(df, trades)
 
-        # ✅ Filter: Only open trades (no exit recorded)
-        # ✅ Filter: Only open trades (outcome = 0 means not exited yet)
+        # --- Show ALL trades first ---
+        st.subheader("📋 All Detected Trades")
+        all_trades_table = trades.sort_values("entry_date", ascending=False)
+        st.dataframe(all_trades_table, use_container_width=True)
+
+        # ✅ Only apply ML to open trades (outcome == 0)
         ml_open = ml_df[
-        (ml_df["days_before_entry"] == 0) & 
-        (ml_df["outcome"] == 0)
+            (ml_df["days_before_entry"] == 0) & 
+            (ml_df["outcome"] == 0)
         ].copy()
 
-
         if ml_open.empty:
-            st.info("✅ No open trades found. All trades have already exited.")
+            st.info("✅ No open trades found. All trades have exited.")
         else:
-            model = load_model()  # ✅ Use cached loader
+            model = load_model()
             ml_pred_df = load_model_and_predict(ml_open, model)
 
-            # --- Show predictions ---
-            st.dataframe(ml_pred_df[[
-                "symbol", "sector", "entry_date", "entry", "target", 
-                "predicted_exit", "abs_error", "pct_error", "exit_date"
-            ]].sort_values("entry_date", ascending=False))
+            # --- Show predictions for open trades only ---
+            st.subheader("🤖 ML Predictions for Open Trades")
+            st.dataframe(
+                ml_pred_df[[ 
+                    "symbol", "sector", "entry_date", "entry", "target", 
+                    "predicted_exit", "abs_error", "pct_error", "exit_date"
+                ]].sort_values("entry_date", ascending=False),
+                use_container_width=True
+            )
 
-            # --- Download button ---
+            # --- Download ---
             csv = ml_pred_df.to_csv(index=False).encode("utf-8")
             st.download_button(
-                "📥 Download ML Predictions (Open Trades)", 
-                csv, 
-                "predicted_open_trades.csv", 
+                "📥 Download ML Predictions (Open Trades)",
+                csv,
+                "predicted_open_trades.csv",
                 "text/csv"
             )
