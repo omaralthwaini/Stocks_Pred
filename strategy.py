@@ -1,3 +1,5 @@
+import pandas as pd
+
 def run_strategy(df):
     df = df.copy()
     df = df.sort_values("date").reset_index(drop=True)
@@ -14,6 +16,7 @@ def run_strategy(df):
     df["above_smas"] = df["close"] > df[[f"sma_{w}" for w in [10, 20, 50, 200]]].max(axis=1)
     df["sma_up_all"] = df[[f"sma_{w}_up" for w in [10, 20, 50]]].all(axis=1)
 
+    # ✅ Make sure trades list is initialized before the loop
     trades = []
 
     i = 0
@@ -24,17 +27,15 @@ def run_strategy(df):
             entry_price = row["close"]
             symbol = row["symbol"]
 
-            # Exit condition: close below at least 2 SMAs
-            exit_date, exit_price = None, None
-            j_exit = None  # ✅ define j_exit safely
+            exit_date, exit_price, j_exit = None, None, None
 
-            for j in range(i+1, len(df)):
+            for j in range(i + 1, len(df)):
                 next_row = df.iloc[j]
                 below = sum(next_row["close"] < next_row[f"sma_{w}"] for w in [10, 20, 50, 200])
                 if below >= 2:
                     exit_date = next_row["date"]
                     exit_price = next_row["close"]
-                    j_exit = j  # ✅ remember where we exited
+                    j_exit = j
                     break
 
             trades.append({
@@ -50,8 +51,9 @@ def run_strategy(df):
                 )
             })
 
-            i = j_exit + 1 if j_exit is not None else i + 1  # ✅ fallback
+            i = j_exit + 1 if j_exit is not None else i + 1
         else:
             i += 1
 
+    # ✅ Even if trades is still empty, this is valid
     return pd.DataFrame(trades)
