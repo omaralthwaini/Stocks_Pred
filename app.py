@@ -17,27 +17,30 @@ def load_data():
 
 df = load_data()
 
-# --- Run strategy to detect trades ---
-trades = run_strategy(df)
+# --- Spinner wrapper for heavy logic ---
+with st.spinner("⏳ Running strategy and predicting exit prices..."):
+    
+    # --- Run strategy to detect trades ---
+    trades = run_strategy(df)
 
-if trades.empty:
-    st.warning("No valid trades found.")
-else:
-    st.success(f"✅ {len(trades)} trades detected")
+    if trades.empty:
+        st.warning("No valid trades found.")
+    else:
+        st.success(f"✅ {len(trades)} trades detected")
 
-    # --- Build ML dataset ---
-    ml_df = build_ml_dataset(df, trades)
+        # --- Build ML dataset ---
+        ml_df = build_ml_dataset(df, trades)
 
-    # --- Load model and predict ---
-    model = joblib.load("model.pkl")
-    ml_pred_df = load_model_and_predict(ml_df, model)
+        # --- Load model and predict ---
+        model = joblib.load("model.pkl")
+        ml_pred_df = load_model_and_predict(ml_df, model)
 
-    # --- Show results ---
-    st.dataframe(ml_pred_df[[
-        "symbol", "sector", "entry_date", "entry", "target", 
-        "predicted_exit", "abs_error", "pct_error", "pct_return", "exit_date"
-    ]].sort_values("entry_date", ascending=False))
+        # --- Show results ---
+        st.dataframe(ml_pred_df[[
+            "symbol", "sector", "entry_date", "entry", "target", 
+            "predicted_exit", "abs_error", "pct_error", "pct_return", "exit_date"
+        ]].sort_values("entry_date", ascending=False))
 
-    # --- Downloadable CSV ---
-    csv = ml_pred_df.to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Download results CSV", csv, "predicted_trades.csv", "text/csv")
+        # --- Downloadable CSV ---
+        csv = ml_pred_df.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download results CSV", csv, "predicted_trades.csv", "text/csv")
