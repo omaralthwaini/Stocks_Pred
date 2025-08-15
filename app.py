@@ -34,10 +34,12 @@ with st.spinner("⏳ Running strategy and predicting exit prices..."):
         ml_df = build_ml_dataset(df, trades)
 
         # ✅ Filter: Only open trades (no exit recorded)
+        # ✅ Filter: Only open trades (outcome = 0 means not exited yet)
         ml_open = ml_df[
-            (ml_df["days_before_entry"] == 0) & 
-            (ml_df["exit_date"].isna() | ml_df["exit_price"].isna())
+        (ml_df["days_before_entry"] == 0) & 
+        (ml_df["outcome"] == 0)
         ].copy()
+
 
         if ml_open.empty:
             st.info("✅ No open trades found. All trades have already exited.")
