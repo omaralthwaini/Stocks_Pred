@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import joblib
-from utils.strategy import run_strategy
-from utils.ml_features import build_ml_dataset
-from utils.model_loader import load_model_and_predict
+from strategy import run_strategy
+from ml_features import build_ml_dataset
+from model_loader import load_model_and_predict
 
 # --- Title ---
 st.title("📈 Smart Backtester + ML Exit Predictor")
@@ -27,7 +27,7 @@ if uploaded_file:
         ml_df = build_ml_dataset(df, trades)
 
         # --- Load model and predict ---
-        model = joblib.load("model/rf_exit_model.pkl")
+        model = joblib.load("model.pkl")
         ml_pred_df = load_model_and_predict(ml_df, model)
 
         # --- Show results ---
