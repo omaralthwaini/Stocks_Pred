@@ -49,9 +49,10 @@ with st.spinner("⏳ Running strategy and predicting exit prices..."):
             ml_pred_df = load_model_and_predict(ml_open, model)
 
             st.subheader("🤖 ML Predictions for Open Trades")
+            st.write("Available columns:", ml_pred_df.columns.tolist())
             st.dataframe(ml_pred_df[[
-                "symbol", "sector", "entry_date", "entry", "target", 
-                "predicted_exit", "abs_error", "pct_error", "exit_date"
+                "symbol", "sector", "entry_date", "entry",
+                "predicted_exit"
             ]].sort_values("entry_date", ascending=False), use_container_width=True)
 
             csv_pred = ml_pred_df.to_csv(index=False).encode("utf-8")
