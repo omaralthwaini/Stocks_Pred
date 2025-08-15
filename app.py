@@ -8,34 +8,36 @@ from model_loader import load_model_and_predict
 # --- Title ---
 st.title("📈 Smart Backtester + ML Exit Predictor")
 
-# --- Upload stock file ---
-uploaded_file = st.file_uploader("Upload stock data CSV (date, open, high, low, close, volume, symbol)", type=["csv"])
-
-if uploaded_file:
-    df = pd.read_csv(uploaded_file, parse_dates=["date"])
+# --- Load data from file in repo ---
+@st.cache_data
+def load_data():
+    df = pd.read_csv("stocks.csv", parse_dates=["date"])
     df = df.sort_values(["symbol", "date"])
+    return df
 
-    # --- Run strategy to detect trades ---
-    trades = run_strategy(df)
+df = load_data()
 
-    if trades.empty:
-        st.warning("No valid trades found.")
-    else:
-        st.success(f"✅ {len(trades)} trades detected")
+# --- Run strategy to detect trades ---
+trades = run_strategy(df)
 
-        # --- Build ML dataset ---
-        ml_df = build_ml_dataset(df, trades)
+if trades.empty:
+    st.warning("No valid trades found.")
+else:
+    st.success(f"✅ {len(trades)} trades detected")
 
-        # --- Load model and predict ---
-        model = joblib.load("model.pkl")
-        ml_pred_df = load_model_and_predict(ml_df, model)
+    # --- Build ML dataset ---
+    ml_df = build_ml_dataset(df, trades)
 
-        # --- Show results ---
-        st.dataframe(ml_pred_df[[
-            "symbol", "sector", "entry_date", "entry", "target", 
-            "predicted_exit", "abs_error", "pct_error", "pct_return", "exit_date"
-        ]].sort_values("entry_date", ascending=False))
+    # --- Load model and predict ---
+    model = joblib.load("model.pkl")
+    ml_pred_df = load_model_and_predict(ml_df, model)
 
-        # --- Downloadable CSV ---
-        csv = ml_pred_df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download results CSV", csv, "predicted_trades.csv", "text/csv")
+    # --- Show results ---
+    st.dataframe(ml_pred_df[[
+        "symbol", "sector", "entry_date", "entry", "target", 
+        "predicted_exit", "abs_error", "pct_error", "pct_return", "exit_date"
+    ]].sort_values("entry_date", ascending=False))
+
+    # --- Downloadable CSV ---
+    csv = ml_pred_df.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Download results CSV", csv, "predicted_trades.csv", "text/csv")
