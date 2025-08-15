@@ -49,11 +49,19 @@ with st.spinner("⏳ Running strategy and predicting exit prices..."):
             ml_pred_df = load_model_and_predict(ml_open, model)
 
             st.subheader("🤖 ML Predictions for Open Trades")
-            st.write("Available columns:", ml_pred_df.columns.tolist())
-            st.dataframe(ml_pred_df[[
-                "symbol", "sector", "entry_date", "entry",
-                "predicted_exit"
-            ]].sort_values("entry_date", ascending=False), use_container_width=True)
 
+            # Calculate predicted % return
+            ml_pred_df["predicted_pct_return"] = 100 * (ml_pred_df["predicted_exit"] / ml_pred_df["entry"] - 1)
+
+            # Sort and display
+            st.dataframe(
+                ml_pred_df[[
+                    "symbol", "sector", "date", "entry",
+                    "predicted_exit", "predicted_pct_return"
+                ]].sort_values("predicted_pct_return", ascending=False),
+                use_container_width=True
+            )
+
+            # Download predictions
             csv_pred = ml_pred_df.to_csv(index=False).encode("utf-8")
             st.download_button("📥 Download ML Predictions", csv_pred, "ml_predictions_open_trades.csv", "text/csv")
