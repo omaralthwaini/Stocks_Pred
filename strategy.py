@@ -3,16 +3,14 @@ import numpy as np
 
 def run_strategy(df, k_days_rising=3, eps=1e-6):
     trades = []
-
-    for sym, group in df.groupby("symbol"):
-        df_sym = group.sort_values("date").reset_index(drop=True).copy()
+    for sym, g in df.groupby("symbol"):
+        df_sym = g.sort_values("date").copy().reset_index(drop=True)
 
         for w in [10, 20, 50, 200]:
             df_sym[f"sma_{w}"] = df_sym["close"].rolling(w, min_periods=w).mean()
 
         for w in [10, 20, 50]:
-            col = f"sma_{w}"
-            inc = df_sym[col].diff() > eps
+            inc = df_sym[f"sma_{w}"].diff() > eps
             df_sym[f"sma_{w}_up"] = inc.rolling(k_days_rising, min_periods=k_days_rising).apply(lambda x: x.all(), raw=False).astype(bool)
 
         df_sym["above_smas"] = df_sym["close"] > df_sym[[f"sma_{w}" for w in [10, 20, 50, 200]]].max(axis=1) + eps
@@ -25,18 +23,14 @@ def run_strategy(df, k_days_rising=3, eps=1e-6):
             if row["ready"] and row["above_smas"] and row["sma_up_all"]:
                 entry_date = row["date"]
                 entry_price = row["close"]
-
-                exit_date = None
-                exit_price = None
-                exit_reason = "force_close"
+                exit_date, exit_price = None, None
 
                 for j in range(i + 1, len(df_sym)):
-                    next_row = df_sym.iloc[j]
-                    below_count = sum(next_row["close"] < next_row[f"sma_{w}"] for w in [10, 20, 50, 200])
+                    future = df_sym.iloc[j]
+                    below_count = sum(future["close"] < future[f"sma_{w}"] for w in [10, 20, 50, 200])
                     if below_count >= 2:
-                        exit_date = next_row["date"]
-                        exit_price = next_row["close"]
-                        exit_reason = "sma_below_2"
+                        exit_date = future["date"]
+                        exit_price = future["close"]
                         break
 
                 trades.append({
@@ -45,7 +39,7 @@ def run_strategy(df, k_days_rising=3, eps=1e-6):
                     "entry": entry_price,
                     "exit_date": exit_date,
                     "exit_price": exit_price,
-                    "exit_reason": exit_reason,
+                    "exit_reason": "sma_below_2" if exit_date else "force_close",
                     "outcome": (
                         1 if exit_price and exit_price > entry_price
                         else -1 if exit_price and exit_price < entry_price
@@ -54,7 +48,7 @@ def run_strategy(df, k_days_rising=3, eps=1e-6):
                 })
 
                 if exit_date is None:
-                    break  # ⛔ Stop further trades if one is still open
+                    break  # stop new trades if last one is still open
 
                 i = j + 1
             else:
