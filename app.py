@@ -41,15 +41,16 @@ with st.spinner("⏳ Running strategy and predicting exit prices..."):
 
         # --- Filter open trades only ---
 # Step 1: Get list of open trade IDs from trades
-        open_ids = trades[trades["outcome"] == 0].apply(
-        lambda row: f"{row['symbol']}_{row['entry_date'].strftime('%Y%m%d')}", axis=1
-)
+# Step 1: Filter open trades
+        open_trades = trades[trades["outcome"] == 0].copy()
 
-# Step 2: Filter ML dataset only for the entry row of these trades
+# Step 2: Filter ML dataset for matching (entry row only)
         ml_open = ml_df[
-        (ml_df["days_before_entry"] == 0) &
-        (ml_df["trade_id"].isin(open_ids))
+       (ml_df["days_before_entry"] == 0) &
+        (ml_df["symbol"].isin(open_trades["symbol"])) &
+        (ml_df["date"].isin(open_trades["entry_date"]))
         ].copy()
+
 
         if ml_open.empty:
             st.info("✅ No open trades. All have been exited.")
