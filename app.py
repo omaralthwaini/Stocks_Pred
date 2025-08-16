@@ -38,6 +38,10 @@ with st.spinner("⏳ Running strategy..."):
 
         selected_symbols = st.multiselect("Filter by Symbol", symbols, default=symbols)
         selected_sectors = st.multiselect("Filter by Sector", sectors, default=sectors)
+        # Ensure dates are proper Python date objects, not pandas Timestamps
+        min_date = pd.to_datetime(min_date).date()
+        max_date = pd.to_datetime(max_date).date()
+
         selected_date_range = st.slider(
             "Filter by Entry Date",
             min_value=min_date,
