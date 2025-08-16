@@ -185,3 +185,5 @@ for sector in open_trades["sector"].dropna().unique():
                 st.info("🟡 Moderate Gain")
             else:
                 st.warning("🔴 Negative Return")
+
+#update
