@@ -17,7 +17,10 @@ if st.button("🔄 Refresh from stocks.csv"):
 
 @st.cache_data
 def get_cached_data():
-    return load_data()
+    df = pd.read_csv("stocks.csv", parse_dates=["date"]).sort_values(["symbol", "date"])
+    caps = pd.read_csv("market_cap.csv")  # This must include `symbol`, `cap_score`, `cap_emoji`
+    return df, caps  # ✅ this line was missing
+
 
 df, caps = get_cached_data()
 
