@@ -126,10 +126,13 @@ if recent_trades.empty:
 else:
     st.dataframe(
         recent_trades[[
-            "symbol", "sector", "entry_date", "entry",
-            "exit_price", "exit_date", "final_pct"
+            "symbol", "sector", "entry_date", "entry", 
+            "exit_price", "exit_date", "stop_loss",
+            "min_low", "max_high", "final_pct"
         ]],
         use_container_width=True
     )
+
     csv_recent = recent_trades.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Download Recent Trades", csv_recent, "recent_trades.csv", "text/csv")
+
