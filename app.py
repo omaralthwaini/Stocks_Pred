@@ -37,7 +37,7 @@ if "sector" in df.columns:
 else:
     trades["sector"] = "Unknown"
 
-# --- Add latest price per symbol ---
+# --- Add latest close per symbol ---
 latest_prices = (
     df.sort_values("date")
       .groupby("symbol")
@@ -46,6 +46,13 @@ latest_prices = (
 
 trades = trades.merge(latest_prices, on="symbol", how="left")
 
+# --- Calculate stop loss (yesterday's low) ---
+df["stop_loss"] = df.groupby("symbol")["low"].shift(1)
+
+# --- Merge stop loss at entry ---
+entry_lows = df[["symbol", "date", "stop_loss"]].rename(columns={"date": "entry_date"})
+trades = trades.merge(entry_lows, on=["symbol", "entry_date"], how="left")
+
 # --- Calculate P/L (%) ---
 trades["pct_return"] = (trades["exit_price"] / trades["entry"] - 1) * 100
 trades["unrealized_pct_return"] = (trades["latest_close"] / trades["entry"] - 1) * 100
@@ -53,6 +60,19 @@ trades["final_pct"] = trades.apply(
     lambda row: row["pct_return"] if pd.notna(row["exit_price"]) else row["unrealized_pct_return"],
     axis=1
 )
+
+# --- Min/Max since entry for open trades ---
+minmax_since_entry = []
+for _, row in trades[trades["outcome"] == 0].iterrows():
+    sym = row["symbol"]
+    entry_date = row["entry_date"]
+    df_slice = df[(df["symbol"] == sym) & (df["date"] >= entry_date)]
+    min_low = df_slice["low"].min()
+    max_high = df_slice["high"].max()
+    minmax_since_entry.append((sym, entry_date, min_low, max_high))
+
+minmax_df = pd.DataFrame(minmax_since_entry, columns=["symbol", "entry_date", "min_low", "max_high"])
+trades = trades.merge(minmax_df, on=["symbol", "entry_date"], how="left")
 
 # -------------------------------------
 # 📂 Download by Sector
@@ -82,7 +102,10 @@ if open_trades.empty:
     st.info("✅ No open trades remaining.")
 else:
     st.dataframe(
-        open_trades[[ "symbol", "sector", "entry_date", "entry", "latest_close", "unrealized_pct_return" ]],
+        open_trades[[
+            "symbol", "sector", "entry_date", "entry", "latest_close",
+            "stop_loss", "unrealized_pct_return", "min_low", "max_high"
+        ]],
         use_container_width=True
     )
     csv_open = open_trades.to_csv(index=False).encode("utf-8")
@@ -102,7 +125,10 @@ if recent_trades.empty:
     st.info("No recent trades in the last 7 days.")
 else:
     st.dataframe(
-        recent_trades[[ "symbol", "sector", "entry_date", "entry", "exit_price", "exit_date", "final_pct" ]],
+        recent_trades[[
+            "symbol", "sector", "entry_date", "entry",
+            "exit_price", "exit_date", "final_pct"
+        ]],
         use_container_width=True
     )
     csv_recent = recent_trades.to_csv(index=False).encode("utf-8")
