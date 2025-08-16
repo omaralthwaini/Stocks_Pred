@@ -1,82 +1,71 @@
-import os
-import time
 import pandas as pd
 import requests
+import os
+import time
 from datetime import datetime, timedelta
 
-# --- CONFIG ---
+# Polygon API Key
 POLYGON_KEY = os.getenv("POLYGON_API_KEY", "ML8KNIhH8hbBS9Cv_w9YcHfwqEpp3IQZ")
-EXISTING_FILE = "stocks.csv"
-LATEST_FILE = "stocks_latest.csv"
-SAVE_PATH = "stocks.csv"  # Overwrites the original after merging
-DAYS_BACK = 6  # Today + 6 previous days = last 7 days
-RATE_LIMIT_SECONDS = 12  # For free plan
 
-# --- LOAD EXISTING DATA ---
-if not os.path.exists(EXISTING_FILE):
-    raise FileNotFoundError(f"{EXISTING_FILE} not found")
+# Load existing data
+existing_path = "stocks.csv"
+if not os.path.exists(existing_path):
+    raise FileNotFoundError("stocks.csv not found. Please ensure it exists.")
 
-df_existing = pd.read_csv(EXISTING_FILE, parse_dates=["date"])
-symbols_sectors = df_existing[["symbol", "sector"]].drop_duplicates()
+existing_df = pd.read_csv(existing_path, parse_dates=["date"])
 
-# --- DEFINE FETCH FUNCTION ---
-def fetch_polygon_daily(symbol: str, start: str, end: str) -> pd.DataFrame:
-    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{start}/{end}"
-    params = {
-        "adjusted": "true",
-        "sort": "asc",
-        "limit": 5000,
-        "apiKey": POLYGON_KEY
-    }
-    try:
-        resp = requests.get(url, params=params)
-        resp.raise_for_status()
-        data = resp.json().get("results", [])
-        if not data:
-            return pd.DataFrame()
-        df = pd.DataFrame(data)
-        df["date"] = pd.to_datetime(df["t"], unit="ms")
-        df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"})
-        df = df[["date", "open", "high", "low", "close", "volume"]]
-        df["symbol"] = symbol
-        return df
-    except Exception as e:
-        print(f"❌ Error fetching {symbol}: {e}")
-        return pd.DataFrame()
-
-# --- DATE RANGE ---
-end_date = datetime.today().strftime("%Y-%m-%d")
-start_date = (datetime.today() - timedelta(days=DAYS_BACK)).strftime("%Y-%m-%d")
-
-# --- FETCH ALL SYMBOLS ---
-latest_frames = []
-
-for i, row in symbols_sectors.iterrows():
-    symbol = row["symbol"]
-    sector = row["sector"]
-    print(f"[{i+1:>3}] Fetching {symbol}...")
-
-    df = fetch_polygon_daily(symbol, start=start_date, end=end_date)
-    if not df.empty:
-        df["sector"] = sector
-        latest_frames.append(df)
-
-    time.sleep(RATE_LIMIT_SECONDS)  # Rate limit for free users
-
-if not latest_frames:
-    print("⚠️ No new data was fetched.")
-    exit()
-
-# --- COMBINE + CLEAN ---
-df_latest = pd.concat(latest_frames, ignore_index=True)
-df_combined = (
-    pd.concat([df_existing, df_latest], ignore_index=True)
-      .drop_duplicates(subset=["symbol", "date"])
-      .sort_values(["symbol", "date"])
-      .reset_index(drop=True)
+# Get unique symbols and sectors from existing file
+symbol_sector_map = (
+    existing_df[["symbol", "sector"]]
+    .drop_duplicates()
+    .sort_values("symbol")
+    .reset_index(drop=True)
 )
 
-# --- SAVE ---
-df_combined.to_csv(SAVE_PATH, index=False)
-print(f"\n✅ Update complete. Combined file saved to {SAVE_PATH}")
-print(f"📊 Total rows: {len(df_combined):,} — Unique symbols: {df_combined['symbol'].nunique()}")
+# Determine the date range for past 7 calendar days
+today = datetime.now().date()
+start_date = (today - timedelta(days=6)).strftime("%Y-%m-%d")
+end_date = today.strftime("%Y-%m-%d")
+
+# Polygon API fetch function
+def fetch_polygon_daily(symbol, start, end):
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{start}/{end}"
+    params = {"adjusted": "true", "sort": "asc", "limit": 50000, "apiKey": POLYGON_KEY}
+    resp = requests.get(url, params=params)
+    if resp.status_code != 200:
+        print(f"⚠️ {symbol}: Error {resp.status_code}")
+        return pd.DataFrame()
+    data = resp.json().get("results", [])
+    if not data:
+        return pd.DataFrame()
+    df = pd.DataFrame(data)
+    df["date"] = pd.to_datetime(df["t"], unit="ms")
+    df = df.rename(columns={
+        "o": "open", "h": "high", "l": "low",
+        "c": "close", "v": "volume"
+    })[["date", "open", "high", "low", "close", "volume"]]
+    df["symbol"] = symbol
+    return df
+
+# Fetch latest 7 days for each symbol
+all_frames = []
+for i, row in symbol_sector_map.iterrows():
+    symbol, sector = row["symbol"], row["sector"]
+    print(f"📡 Fetching {symbol} ({i+1}/{len(symbol_sector_map)})...")
+    df_new = fetch_polygon_daily(symbol, start_date, end_date)
+    if not df_new.empty:
+        df_new["sector"] = sector
+        all_frames.append(df_new)
+    time.sleep(1.2)  # Be nice to free-tier limits
+
+# Combine with existing (remove duplicates)
+if all_frames:
+    new_data = pd.concat(all_frames, ignore_index=True)
+    combined = pd.concat([existing_df, new_data], ignore_index=True)
+    combined = combined.drop_duplicates(subset=["symbol", "date"]).sort_values(["symbol", "date"])
+    
+    # Overwrite the original file
+    combined.to_csv("stocks.csv", index=False)
+    print(f"\n✅ stocks.csv updated with latest {len(new_data)} rows.")
+else:
+    print("\n⚠️ No new data fetched. stocks.csv left unchanged.")
