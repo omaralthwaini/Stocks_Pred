@@ -9,7 +9,7 @@ st.title("📈 Smart Backtester — Sector Reports + Open + Recent Trades")
 # --- Load and cache data ---
 def load_data():
     df = pd.read_csv("stocks.csv", parse_dates=["date"])
-    caps = pd.read_csv("market_cap.csv")
+    caps = pd.read_csv("market_cap.csv")  # Must include symbol, cap_score, cap_emoji
     return df.sort_values(["symbol", "date"]), caps
 
 if st.button("🔄 Refresh from stocks.csv"):
@@ -17,10 +17,7 @@ if st.button("🔄 Refresh from stocks.csv"):
 
 @st.cache_data
 def get_cached_data():
-    df = pd.read_csv("stocks.csv", parse_dates=["date"]).sort_values(["symbol", "date"])
-    caps = pd.read_csv("market_cap.csv")  # <-- Make sure this file exists
-    return df, caps
-
+    return load_data()
 
 df, caps = get_cached_data()
 
@@ -34,17 +31,17 @@ if trades.empty:
 else:
     st.success(f"✅ {len(trades)} trades detected.")
 
-# --- Map sector + market cap ---
-if "sector" in df.columns:
-    sector_map = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
-    trades["sector"] = trades["symbol"].map(sector_map)
-else:
-    trades["sector"] = "Unknown"
+# --- Sector + Market Cap Mapping ---
+sector_map = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
+trades["sector"] = trades["symbol"].map(sector_map)
 
-cap_map = caps.set_index("symbol")["cap_rank"]
-trades["cap_rank"] = trades["symbol"].map(cap_map)
+cap_score_map = caps.set_index("symbol")["cap_score"]
+cap_emoji_map = caps.set_index("symbol")["cap_emoji"]
 
-# --- Add latest close per symbol ---
+trades["cap_score"] = trades["symbol"].map(cap_score_map)
+trades["cap_emoji"] = trades["symbol"].map(cap_emoji_map)
+
+# --- Latest close per symbol ---
 latest_prices = (
     df.sort_values("date")
       .groupby("symbol")
@@ -52,12 +49,12 @@ latest_prices = (
 )
 trades = trades.merge(latest_prices, on="symbol", how="left")
 
-# --- Calculate stop loss (yesterday's low) ---
+# --- Stop loss (yesterday’s low) ---
 df["stop_loss"] = df.groupby("symbol")["low"].shift(1)
 entry_lows = df[["symbol", "date", "stop_loss"]].rename(columns={"date": "entry_date"})
 trades = trades.merge(entry_lows, on=["symbol", "entry_date"], how="left")
 
-# --- Calculate P/L (%) ---
+# --- Returns ---
 trades["pct_return"] = (trades["exit_price"] / trades["entry"] - 1) * 100
 trades["unrealized_pct_return"] = (trades["latest_close"] / trades["entry"] - 1) * 100
 trades["final_pct"] = trades.apply(
@@ -65,18 +62,18 @@ trades["final_pct"] = trades.apply(
     axis=1
 )
 
-# --- Add cap emoji next to symbol ---
-def attach_cap_emoji(row):
-    if pd.isna(row["cap_rank"]): return row["symbol"]
-    emoji = row["cap_rank"].split(" ")[0]
-    return f"{emoji} {row['symbol']}"
+# --- Attach emoji to symbol display ---
+def attach_symbol_display(row):
+    if pd.isna(row["cap_emoji"]):
+        return row["symbol"]
+    return f"{row['cap_emoji']} {row['symbol']}"
 
-trades["symbol"] = trades.apply(attach_cap_emoji, axis=1)
+trades["symbol_display"] = trades.apply(attach_symbol_display, axis=1)
 
-# --- Min/Max since entry for open trades ---
+# --- Min/Max since entry (for open trades) ---
 minmax = []
 for _, row in trades[trades["outcome"] == 0].iterrows():
-    sym = row["symbol"].split(" ", 1)[-1]
+    sym = row["symbol"]
     entry_date = row["entry_date"]
     df_slice = df[(df["symbol"] == sym) & (df["date"] >= entry_date)]
     minmax.append((row["symbol"], entry_date, df_slice["low"].min(), df_slice["high"].max()))
@@ -102,7 +99,7 @@ for sector in trades["sector"].dropna().unique():
         )
 
 # -------------------------------------
-# 📌 All OPEN Trades
+# 🔓 Open Trades
 # -------------------------------------
 open_trades = trades[trades["outcome"] == 0].sort_values("entry_date", ascending=False)
 
@@ -112,8 +109,8 @@ if open_trades.empty:
     st.info("✅ No open trades remaining.")
 else:
     st.dataframe(
-        open_trades[[
-            "symbol", "sector", "entry_date", "entry", "latest_close",
+        open_trades[[ 
+            "symbol_display", "sector", "entry_date", "entry", "latest_close",
             "stop_loss", "unrealized_pct_return", "min_low", "max_high"
         ]],
         use_container_width=True
@@ -122,7 +119,7 @@ else:
     st.download_button("📥 Download Open Trades", csv_open, "open_trades.csv", "text/csv")
 
 # -------------------------------------
-# ⏰ Recent Entries (Last 7 Days)
+# ⏰ Trades in Last 7 Days
 # -------------------------------------
 st.subheader("🕒 Trades Entered in the Last 7 Days")
 
@@ -130,29 +127,26 @@ latest_entry = trades["entry_date"].max()
 recent_cutoff = latest_entry - timedelta(days=7)
 recent_trades = trades[trades["entry_date"] >= recent_cutoff].copy()
 
-# Sort by date first, then by cap_rank
-emoji_sort = {"🏆": 3, "🔷": 2, "🟢": 1}
-recent_trades["emoji"] = recent_trades["symbol"].str.extract(r"(^\S+)")[0]
-recent_trades["cap_sort"] = recent_trades["emoji"].map(emoji_sort).fillna(0)
-recent_trades = recent_trades.sort_values(["entry_date", "cap_sort"], ascending=[False, False])
+recent_trades = recent_trades.sort_values(
+    ["entry_date", "cap_score"],
+    ascending=[False, True]
+)
 
 if recent_trades.empty:
     st.info("No recent trades in the last 7 days.")
 else:
     st.dataframe(
         recent_trades[[
-            "symbol", "sector", "entry_date", "entry", 
-            "exit_price", "exit_date", "stop_loss",
-            "min_low", "max_high", "final_pct"
+            "symbol_display", "sector", "entry_date", "entry",
+            "exit_price", "exit_date", "stop_loss", "min_low", "max_high", "final_pct"
         ]],
         use_container_width=True
     )
-
     csv_recent = recent_trades.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Download Recent Trades", csv_recent, "recent_trades.csv", "text/csv")
 
 # -------------------------------------
-# 🧭 Detailed Trade Summary by Sector
+# 🧭 Open Trade Summaries by Sector
 # -------------------------------------
 st.subheader("🧭 Open Trade Summaries by Sector")
 
@@ -160,13 +154,13 @@ for sector in open_trades["sector"].dropna().unique():
     group = open_trades[open_trades["sector"] == sector]
     with st.expander(f"📂 {sector} — {len(group)} Open Trades", expanded=False):
         for _, row in group.iterrows():
-            symbol = row["symbol"]
-            sym = symbol.split(" ", 1)[-1]  # remove emoji
+            symbol_disp = row["symbol_display"]
+            sym = row["symbol"]  # actual raw symbol
             df_sym = df[(df["symbol"] == sym) & (df["date"] >= row["entry_date"])].copy()
             for w in [10, 20, 50, 200]:
                 df_sym[f"sma_{w}"] = df_sym["close"].rolling(w).mean()
 
-            st.markdown(f"### {symbol} — Entry: {row['entry_date'].date()} @ ${row['entry']:.2f}")
+            st.markdown(f"### {symbol_disp} — Entry: {row['entry_date'].date()} @ ${row['entry']:.2f}")
             st.line_chart(df_sym.set_index("date")[["close", "sma_10", "sma_20", "sma_50", "sma_200"]],
                           use_container_width=True)
 
@@ -185,5 +179,3 @@ for sector in open_trades["sector"].dropna().unique():
                 st.info("🟡 Moderate Gain")
             else:
                 st.warning("🔴 Negative Return")
-
-#update
