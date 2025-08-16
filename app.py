@@ -137,47 +137,57 @@ else:
     st.download_button("📥 Download Recent Trades", csv_recent, "recent_trades.csv", "text/csv")
 
 # -------------------------------------
-# 📈 Trade Summaries (for Open Trades)
 # -------------------------------------
-st.subheader("🔍 Explore Open Trade Details")
+# 🧭 Detailed Trade Summary by Sector
+# -------------------------------------
+st.subheader("🧭 Open Trade Summaries by Sector")
 
-for _, trade in open_trades.iterrows():
-    with st.expander(f"{trade['symbol']} — Entry: {trade['entry_date'].date()} @ ${trade['entry']:.2f}"):
-        symbol = trade["symbol"]
-        entry_date = trade["entry_date"]
-        exit_price = trade["exit_price"]
-        entry_price = trade["entry"]
-        stop_loss = trade.get("stop_loss", None)
+# Sort for readability
+open_trades = open_trades.sort_values(["sector", "entry_date"], ascending=[True, False])
 
-        # Filter price history since entry
-        df_sym = df[df["symbol"] == symbol].copy()
-        df_sym = df_sym[df_sym["date"] >= entry_date]
+# Loop over sectors
+for sector in open_trades["sector"].dropna().unique():
+    sector_trades = open_trades[open_trades["sector"] == sector]
+    with st.expander(f"📂 {sector} — {len(sector_trades)} Open Trades", expanded=False):
+        for _, trade in sector_trades.iterrows():
+            symbol = trade["symbol"]
+            entry_date = trade["entry_date"]
+            entry_price = trade["entry"]
+            stop_loss = trade.get("stop_loss", None)
+            latest_close = trade["latest_close"]
 
-        # Compute SMAs for visual
-        for w in [10, 20, 50, 200]:
-            df_sym[f"sma_{w}"] = df_sym["close"].rolling(w).mean()
+            # Get price data since entry
+            df_sym = df[(df["symbol"] == symbol) & (df["date"] >= entry_date)].copy()
+            for w in [10, 20, 50, 200]:
+                df_sym[f"sma_{w}"] = df_sym["close"].rolling(w).mean()
 
-        # Plot
-        st.line_chart(
-            df_sym.set_index("date")[["close", "sma_10", "sma_20", "sma_50", "sma_200"]],
-            use_container_width=True
-        )
+            # Min/max since entry
+            min_low = df_sym["low"].min()
+            max_high = df_sym["high"].max()
 
-        # Show trade metrics
-        st.markdown(f"""
-        - 🗓 **Days Since Entry**: {(df_sym['date'].max() - entry_date).days}  
-        - 💰 **Entry Price**: ${entry_price:.2f}  
-        - ⛔ **Stop Loss**: ${stop_loss:.2f}  
-        - 📉 **Min Low Since Entry**: ${trade['min_low']:.2f}  
-        - 📈 **Max High Since Entry**: ${trade['max_high']:.2f}  
-        - 📦 **Latest Close**: ${trade['latest_close']:.2f}  
-        - 📊 **Unrealized % Return**: {trade['unrealized_pct_return']:.2f}%  
-        """)
+            # Trade title
+            st.markdown(f"### {symbol} — Entry: {entry_date.date()} @ ${entry_price:.2f}")
 
-        # Optional: add color-coded label
-        if trade['unrealized_pct_return'] >= 10:
-            st.success("🟢 Strong Position")
-        elif trade['unrealized_pct_return'] >= 0:
-            st.info("🟡 Modest Gain")
-        else:
-            st.warning("🔴 Negative Return — Watch Closely")
+            # Line chart
+            st.line_chart(
+                df_sym.set_index("date")[["close", "sma_10", "sma_20", "sma_50", "sma_200"]],
+                use_container_width=True
+            )
+
+            # Details
+            st.markdown(f"""
+            - 🗓 **Days Since Entry**: {(df_sym['date'].max() - entry_date).days}
+            - ⛔ **Stop Loss**: ${stop_loss:.2f}  
+            - 💵 **Latest Close**: ${latest_close:.2f}  
+            - 📉 **Min Low Since Entry**: ${min_low:.2f}  
+            - 📈 **Max High Since Entry**: ${max_high:.2f}  
+            - 💹 **Unrealized % Return**: {trade['unrealized_pct_return']:.2f}%  
+            """)
+
+            # Optional color label
+            if trade["unrealized_pct_return"] >= 10:
+                st.success("🟢 Strong Position")
+            elif trade["unrealized_pct_return"] >= 0:
+                st.info("🟡 Moderate Gain")
+            else:
+                st.warning("🔴 Negative Return")
