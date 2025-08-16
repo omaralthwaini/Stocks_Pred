@@ -136,3 +136,48 @@ else:
     csv_recent = recent_trades.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Download Recent Trades", csv_recent, "recent_trades.csv", "text/csv")
 
+# -------------------------------------
+# 📈 Trade Summaries (for Open Trades)
+# -------------------------------------
+st.subheader("🔍 Explore Open Trade Details")
+
+for _, trade in open_trades.iterrows():
+    with st.expander(f"{trade['symbol']} — Entry: {trade['entry_date'].date()} @ ${trade['entry']:.2f}"):
+        symbol = trade["symbol"]
+        entry_date = trade["entry_date"]
+        exit_price = trade["exit_price"]
+        entry_price = trade["entry"]
+        stop_loss = trade.get("stop_loss", None)
+
+        # Filter price history since entry
+        df_sym = df[df["symbol"] == symbol].copy()
+        df_sym = df_sym[df_sym["date"] >= entry_date]
+
+        # Compute SMAs for visual
+        for w in [10, 20, 50, 200]:
+            df_sym[f"sma_{w}"] = df_sym["close"].rolling(w).mean()
+
+        # Plot
+        st.line_chart(
+            df_sym.set_index("date")[["close", "sma_10", "sma_20", "sma_50", "sma_200"]],
+            use_container_width=True
+        )
+
+        # Show trade metrics
+        st.markdown(f"""
+        - 🗓 **Days Since Entry**: {(df_sym['date'].max() - entry_date).days}  
+        - 💰 **Entry Price**: ${entry_price:.2f}  
+        - ⛔ **Stop Loss**: ${stop_loss:.2f}  
+        - 📉 **Min Low Since Entry**: ${trade['min_low']:.2f}  
+        - 📈 **Max High Since Entry**: ${trade['max_high']:.2f}  
+        - 📦 **Latest Close**: ${trade['latest_close']:.2f}  
+        - 📊 **Unrealized % Return**: {trade['unrealized_pct_return']:.2f}%  
+        """)
+
+        # Optional: add color-coded label
+        if trade['unrealized_pct_return'] >= 10:
+            st.success("🟢 Strong Position")
+        elif trade['unrealized_pct_return'] >= 0:
+            st.info("🟡 Modest Gain")
+        else:
+            st.warning("🔴 Negative Return — Watch Closely")
