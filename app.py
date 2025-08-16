@@ -32,6 +32,7 @@ with st.spinner("⏳ Running strategy..."):
         # Options
         symbols = sorted(trades["symbol"].unique())
         sectors = sorted(df["sector"].dropna().unique())
+        trades["entry_date"] = pd.to_datetime(trades["entry_date"])
         min_date = trades["entry_date"].min()
         max_date = trades["entry_date"].max()
 
