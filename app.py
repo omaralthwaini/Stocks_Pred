@@ -21,7 +21,11 @@ def load_model():
 # --- Begin execution ---
 with st.spinner("⏳ Running strategy and predicting exit prices..."):
     df = load_data()
-    trades = run_strategy(df)
+    @st.cache_data
+    def get_trades(df):
+        return run_strategy(df)
+# Use it
+    trades = get_trades(df)
 
     if trades.empty:
         st.warning("⚠️ No trades found.")
@@ -41,11 +45,17 @@ with st.spinner("⏳ Running strategy and predicting exit prices..."):
 
         # Filter only open trades (outcome = 0, entry row)
         open_trades = trades[trades["outcome"] == 0].copy()
-        ml_open = ml_df[
-            (ml_df["days_before_entry"] == 0) &
-            (ml_df["symbol"].isin(open_trades["symbol"])) &
-            (ml_df["date"].isin(open_trades["entry_date"]))
-        ].copy()
+        # Filter to entry rows
+        entry_rows = ml_df[ml_df["days_before_entry"] == 0].copy()
+
+# Merge to get exact match: symbol + date = entry_date
+        ml_open = entry_rows.merge(
+        open_trades[["symbol", "entry_date"]],
+        left_on=["symbol", "date"],
+        right_on=["symbol", "entry_date"],
+        how="inner"
+        ).copy()
+
 
         if ml_open.empty:
             st.info("✅ No open trades. All have been exited.")
