@@ -6,13 +6,19 @@ from datetime import timedelta
 # --- App title ---
 st.title("📈 Smart Backtester — Sector Reports + Open + Recent Trades")
 
-# --- Load stock data ---
-@st.cache_data
+# --- Refresh logic ---
 def load_data():
     df = pd.read_csv("stocks.csv", parse_dates=["date"])
     return df.sort_values(["symbol", "date"])
 
-df = load_data()
+if st.button("🔄 Refresh from stocks.csv"):
+    st.cache_data.clear()
+
+@st.cache_data
+def get_cached_data():
+    return load_data()
+
+df = get_cached_data()
 
 # --- Run strategy ---
 with st.spinner("⏳ Detecting trades..."):
@@ -31,7 +37,7 @@ if "sector" in df.columns:
 else:
     trades["sector"] = "Unknown"
 
-# --- Add latest price per symbol (for open trade unrealized % PnL) ---
+# --- Add latest price per symbol ---
 latest_prices = (
     df.sort_values("date")
       .groupby("symbol")
@@ -76,10 +82,7 @@ if open_trades.empty:
     st.info("✅ No open trades remaining.")
 else:
     st.dataframe(
-        open_trades[[
-            "symbol", "sector", "entry_date", "entry", "latest_close",
-            "unrealized_pct_return"
-        ]],
+        open_trades[[ "symbol", "sector", "entry_date", "entry", "latest_close", "unrealized_pct_return" ]],
         use_container_width=True
     )
     csv_open = open_trades.to_csv(index=False).encode("utf-8")
@@ -99,10 +102,7 @@ if recent_trades.empty:
     st.info("No recent trades in the last 7 days.")
 else:
     st.dataframe(
-        recent_trades[[
-            "symbol", "sector", "entry_date", "entry",
-            "exit_price", "exit_date", "final_pct"
-        ]],
+        recent_trades[[ "symbol", "sector", "entry_date", "entry", "exit_price", "exit_date", "final_pct" ]],
         use_container_width=True
     )
     csv_recent = recent_trades.to_csv(index=False).encode("utf-8")
