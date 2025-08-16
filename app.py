@@ -1,50 +1,60 @@
 import streamlit as st
 import pandas as pd
-import joblib  # optional if you re-add ML later
 from strategy import run_strategy
+from datetime import timedelta
 
-# --- Title ---
-st.title("📈 Smart Backtester — Trade Signal Viewer")
+# --- App title ---
+st.title("📈 Smart Backtester — Sector Exports + Recent Trades")
 
-# --- Load cached stock data ---
+# --- Load stock data ---
 @st.cache_data
 def load_data():
     df = pd.read_csv("stocks.csv", parse_dates=["date"])
     return df.sort_values(["symbol", "date"])
 
-# --- Load data + run strategy ---
-with st.spinner("⏳ Running strategy to detect trades..."):
-    df = load_data()
+df = load_data()
+
+# --- Run strategy ---
+with st.spinner("⏳ Detecting trades..."):
     trades = run_strategy(df)
 
 if trades.empty:
-    st.warning("⚠️ No trades were detected.")
+    st.warning("⚠️ No trades found.")
     st.stop()
 else:
     st.success(f"✅ {len(trades)} trades detected.")
 
-    # --- Filter Options ---
-    st.subheader("🔍 Filter Trades")
+# --- Merge sector info ---
+if "sector" in df.columns:
+    sector_map = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
+    trades["sector"] = trades["symbol"].map(sector_map)
+else:
+    trades["sector"] = "Unknown"
 
-    symbols = sorted(trades["symbol"].unique())
-    sectors = sorted(df["sector"].dropna().unique()) if "sector" in df.columns else []
+# --- Sector CSV downloaders ---
+st.subheader("📂 Download Trades by Sector")
 
-    selected_symbols = st.multiselect("Filter by Symbol", options=symbols, default=symbols)
-    selected_sectors = st.multiselect("Filter by Sector", options=sectors, default=sectors) if sectors else []
+for sector in trades["sector"].dropna().unique():
+    sector_trades = trades[trades["sector"] == sector]
+    if not sector_trades.empty:
+        csv = sector_trades.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label=f"📥 Download {sector} ({len(sector_trades)} trades)",
+            data=csv,
+            file_name=f"{sector.replace(' ', '_')}_trades.csv",
+            mime="text/csv"
+        )
 
-    # Apply filters
-    filtered = trades.copy()
-    if selected_symbols:
-        filtered = filtered[filtered["symbol"].isin(selected_symbols)]
-    if sectors and selected_sectors:
-        filtered = filtered[filtered["symbol"].isin(
-            df[df["sector"].isin(selected_sectors)]["symbol"].unique()
-        )]
+# --- Recent trades (last 7 days) ---
+st.subheader("🕒 Trades Entered in the Last 7 Days")
 
-    # --- Show table ---
-    st.subheader(f"📋 Filtered Trades ({len(filtered)} shown)")
-    st.dataframe(filtered.sort_values("entry_date", ascending=False), use_container_width=True)
+latest_date = trades["entry_date"].max()
+recent_cutoff = latest_date - timedelta(days=7)
+recent_trades = trades[trades["entry_date"] >= recent_cutoff].sort_values("entry_date", ascending=False)
 
-    # --- Download ---
-    csv = filtered.to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Download Filtered Trades", csv, "filtered_trades.csv", "text/csv")
+if recent_trades.empty:
+    st.info("No trades entered in the last 7 days.")
+else:
+    st.dataframe(recent_trades, use_container_width=True)
+    csv_recent = recent_trades.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Download Recent Trades (Last 7 Days)", csv_recent, "recent_trades.csv", "text/csv")
