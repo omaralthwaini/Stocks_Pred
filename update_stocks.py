@@ -56,7 +56,7 @@ for i, row in symbol_sector_map.iterrows():
     if not df_new.empty:
         df_new["sector"] = sector
         all_frames.append(df_new)
-    time.sleep(1.2)  # Be nice to free-tier limits
+    time.sleep(1.3)  # Be nice to free-tier limits
 
 # Combine with existing (remove duplicates)
 if all_frames:
