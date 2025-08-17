@@ -34,6 +34,13 @@ if trades.empty:
 else:
     st.success(f"✅ {len(trades)} trades detected.")
 
+# -------------------------------------
+# 📥 Full Trades Export
+# -------------------------------------
+st.subheader("📦 Download All Trades")
+csv_all = trades.sort_values("entry_date", ascending=False).to_csv(index=False).encode("utf-8")
+st.download_button("📥 Download Full Trade History", csv_all, "all_trades.csv", "text/csv")
+
 # --- Sector & Cap Mapping ---
 sector_map = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
 cap_score_map = caps.set_index("symbol")["cap_score"]
