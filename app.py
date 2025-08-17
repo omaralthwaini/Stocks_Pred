@@ -34,21 +34,6 @@ if trades.empty:
 else:
     st.success(f"✅ {len(trades)} trades detected.")
 
-# -------------------------------------
-# 📥 Full Trades Export
-# -------------------------------------
-st.subheader("📦 Download All Trades")
-
-# Sort and select the same columns as sector exports
-all_trades_to_export = trades.sort_values("entry_date", ascending=False)[[
-    "symbol_display", "sector", "entry_date", "entry",
-    "exit_price", "exit_date", "stop_loss",
-    "min_low", "max_high", "final_pct"
-]]
-
-csv_all = all_trades_to_export.to_csv(index=False).encode("utf-8")
-st.download_button("📥 Download Full Trade History", csv_all, "all_trades.csv", "text/csv")
-
 
 # --- Sector & Cap Mapping ---
 sector_map = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
@@ -96,6 +81,19 @@ for _, row in trades[trades["outcome"] == 0].iterrows():
 
 minmax_df = pd.DataFrame(minmax, columns=["symbol", "entry_date", "min_low", "max_high"])
 trades = trades.merge(minmax_df, on=["symbol", "entry_date"], how="left")
+
+# 📥 Full Trades Export (Matching Sector Format)
+st.subheader("📦 Download All Trades")
+
+all_trades_to_export = trades.sort_values("entry_date", ascending=False)[[
+    "symbol_display", "sector", "entry_date", "entry",
+    "exit_price", "exit_date", "stop_loss",
+    "min_low", "max_high", "final_pct"
+]]
+
+csv_all = all_trades_to_export.to_csv(index=False).encode("utf-8")
+st.download_button("📥 Download Full Trade History", csv_all, "all_trades.csv", "text/csv")
+
 
 # 📂 Download by Sector
 st.subheader("📂 Download Trades by Sector")
