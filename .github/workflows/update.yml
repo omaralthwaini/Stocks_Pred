@@ -1,0 +1,19 @@
+name: Auto Update Stocks
+
+on:
+  schedule:
+    - cron: '30 14-21 * * 1-5'  # 9:30am–4:30pm ET (every hour)
+  workflow_dispatch:  # optional manual trigger
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - run: pip install pandas requests pytz
+      - run: python Automation.py
+        env:
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
