@@ -38,8 +38,17 @@ else:
 # 📥 Full Trades Export
 # -------------------------------------
 st.subheader("📦 Download All Trades")
-csv_all = trades.sort_values("entry_date", ascending=False).to_csv(index=False).encode("utf-8")
+
+# Sort and select the same columns as sector exports
+all_trades_to_export = trades.sort_values("entry_date", ascending=False)[[
+    "symbol_display", "sector", "entry_date", "entry",
+    "exit_price", "exit_date", "stop_loss",
+    "min_low", "max_high", "final_pct"
+]]
+
+csv_all = all_trades_to_export.to_csv(index=False).encode("utf-8")
 st.download_button("📥 Download Full Trade History", csv_all, "all_trades.csv", "text/csv")
+
 
 # --- Sector & Cap Mapping ---
 sector_map = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
