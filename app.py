@@ -86,7 +86,7 @@ trades = trades.merge(minmax_df, on=["symbol", "entry_date"], how="left")
 st.subheader("📦 Download All Trades")
 
 all_trades_to_export = trades.sort_values("entry_date", ascending=False)[[
-    "symbol_display", "sector", "entry_date", "entry",
+    "symbol_display","cap_score", "sector", "entry_date", "entry", "outcome",
     "exit_price", "exit_date", "stop_loss",
     "min_low", "max_high", "final_pct"
 ]]
