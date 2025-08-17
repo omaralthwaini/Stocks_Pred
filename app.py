@@ -119,11 +119,18 @@ if not recent.empty:
     st.dataframe(recent[[ "symbol_display", "sector", "entry_date", "entry", "exit_price", "exit_date", "stop_loss", "min_low", "max_high", "final_pct" ]], use_container_width=True)
     st.download_button("📥 Download Recent Trades", recent.to_csv(index=False).encode("utf-8"), "recent_trades.csv", "text/csv")
 
-# 🧭 Open Trade Summaries by Sector
-st.subheader("🧭 Open Trade Summaries by Capital")
-for sector in open_trades["cap_emoji"].dropna().unique():
-    group = open_trades[open_trades["cap_emoji"] == sector]
-    with st.expander(f"📂 {sector} — {len(group)} Open Trades", expanded=False):
+# 🧭 Open Trade Summaries by Capital
+st.subheader("💲Open Trade Summaries by Capital")
+
+# Sort cap_emoji values by corresponding cap_score
+sorted_emojis = sorted(
+    open_trades["cap_emoji"].dropna().unique(),
+    key=lambda emoji: open_trades.loc[open_trades["cap_emoji"] == emoji, "cap_score"].min()
+)
+
+for emoji in sorted_emojis:
+    group = open_trades[open_trades["cap_emoji"] == emoji]
+    with st.expander(f"📂 {emoji} — {len(group)} Open Trades", expanded=False):
         for _, row in group.iterrows():
             symbol_disp = row["symbol_display"]
             sym = row["symbol"]
@@ -134,38 +141,25 @@ for sector in open_trades["cap_emoji"].dropna().unique():
 
             st.markdown(f"### {symbol_disp} — Entry: {row['entry_date'].date()} @ ${row['entry']:.2f}")
 
-            # ✅ Candlestick chart with SMAs
+            # ✅ Candlestick chart
             fig = go.Figure()
-
             fig.add_trace(go.Candlestick(
-                x=df_sym["date"],
-                open=df_sym["open"],
-                high=df_sym["high"],
-                low=df_sym["low"],
-                close=df_sym["close"],
-                name="Price"
+                x=df_sym["date"], open=df_sym["open"], high=df_sym["high"],
+                low=df_sym["low"], close=df_sym["close"], name="Price"
             ))
-
             for w in [10, 20, 50, 200]:
-                fig.add_trace(go.Scatter(
-                    x=df_sym["date"],
-                    y=df_sym[f"sma_{w}"],
-                    mode="lines",
-                    name=f"SMA-{w}"
-                ))
+                fig.add_trace(go.Scatter(x=df_sym["date"], y=df_sym[f"sma_{w}"], mode="lines", name=f"SMA-{w}"))
 
             fig.update_layout(
-                height=500,
-                margin=dict(l=10, r=10, t=30, b=10),
-                showlegend=True,
-                xaxis_title="Date",
-                yaxis_title="Price",
+                height=500, margin=dict(l=10, r=10, t=30, b=10),
+                showlegend=True, xaxis_title="Date", yaxis_title="Price",
                 xaxis_rangeslider_visible=False
             )
-
             st.plotly_chart(fig, use_container_width=True)
 
+            # 🆕 Summary block with sector included
             st.markdown(f"""
+            - 🏢 **Sector**: {row['sector']}
             - 🗓 **Days Since Entry**: {(df_sym['date'].max() - row['entry_date']).days}
             - ⛔ **Stop Loss**: ${row["stop_loss"]:.2f}
             - 💵 **Latest Close**: ${row["latest_close"]:.2f}
