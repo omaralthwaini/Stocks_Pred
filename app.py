@@ -120,9 +120,9 @@ if not recent.empty:
     st.download_button("📥 Download Recent Trades", recent.to_csv(index=False).encode("utf-8"), "recent_trades.csv", "text/csv")
 
 # 🧭 Open Trade Summaries by Sector
-st.subheader("🧭 Open Trade Summaries by Sector")
-for sector in open_trades["sector"].dropna().unique():
-    group = open_trades[open_trades["sector"] == sector]
+st.subheader("🧭 Open Trade Summaries by Capital")
+for sector in open_trades["cap_emoji"].dropna().unique():
+    group = open_trades[open_trades["cap_emoji"] == sector]
     with st.expander(f"📂 {sector} — {len(group)} Open Trades", expanded=False):
         for _, row in group.iterrows():
             symbol_disp = row["symbol_display"]
