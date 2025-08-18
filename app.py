@@ -119,6 +119,41 @@ if not recent.empty:
     st.dataframe(recent[[ "symbol_display", "sector", "entry_date", "entry", "exit_price", "exit_date", "stop_loss", "min_low", "max_high", "final_pct" ]], use_container_width=True)
     st.download_button("📥 Download Recent Trades", recent.to_csv(index=False).encode("utf-8"), "recent_trades.csv", "text/csv")
 
+# 📤 Trades Exited in the Last 7 Days
+st.subheader("📤 Trades Exited in the Last 7 Days")
+
+exit_cutoff = trades["exit_date"].max() - timedelta(days=7)
+recent_exits = trades[
+    (trades["exit_date"].notna()) & 
+    (trades["exit_date"] >= exit_cutoff)
+].copy()
+
+# Outcome emojis
+def format_exit(row):
+    pct = row["pct_return"]
+    if pct > 0:
+        emoji = "✅"
+    elif pct < 0:
+        emoji = "❌"
+    else:
+        emoji = "⚪"
+    return f"{emoji} {pct:.2f}%"
+
+if recent_exits.empty:
+    st.info("📭 No trades exited in the last 7 days.")
+else:
+    recent_exits["result"] = recent_exits.apply(format_exit, axis=1)
+
+    st.dataframe(recent_exits[[ 
+        "symbol_display", "sector", "entry_date", "exit_date", 
+        "entry", "exit_price", "exit_reason", "result"
+    ]].sort_values("exit_date", ascending=False), use_container_width=True)
+
+    # Optional download
+    csv_exits = recent_exits.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Download Recent Exits", csv_exits, "recent_exits.csv", "text/csv")
+
+
 # 🧭 Open Trade Summaries by Capital
 st.subheader("💲Open Trade Summaries by Capital")
 
