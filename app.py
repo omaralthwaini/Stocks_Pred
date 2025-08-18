@@ -13,16 +13,17 @@ def load_data():
     caps = pd.read_csv("market_cap.csv")
     return df.sort_values(["symbol", "date"]), caps
 
-if st.button("🔄 Refresh from stocks.csv"):
-    st.cache_data.clear()
+# REMOVE this button and its effect entirely:
+# if st.button("🔄 Refresh from stocks.csv"):
+#     st.cache_data.clear()
 
-@st.cache_data
-def get_cached_data():
-    df = pd.read_csv("stocks.csv", parse_dates=["date"]).sort_values(["symbol", "date"])
-    caps = pd.read_csv("market_cap.csv")
-    return df, caps
+# 🚫 DELETE this @st.cache_data decorator completely
+# @st.cache_data
+def get_latest_data():
+    return load_data()
 
-df, caps = get_cached_data()
+df, caps = get_latest_data()
+
 
 # --- Run strategy ---
 with st.spinner("⏳ Detecting trades..."):
