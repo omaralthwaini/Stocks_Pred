@@ -81,7 +81,7 @@ for i, row in symbol_sector_map.iterrows():
 if all_frames:
     new_data = pd.concat(all_frames, ignore_index=True)
     combined = pd.concat([existing_df, new_data], ignore_index=True)
-    combined = combined.drop_duplicates(subset=["symbol", "date"]).sort_values(["symbol", "date"])
+    combined = combined.drop_duplicates(subset=["symbol", "date"], keep="last")
     
     # Overwrite file
     combined.to_csv("stocks.csv", index=False)
