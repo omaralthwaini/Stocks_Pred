@@ -26,7 +26,7 @@ df, caps = get_cached_data()
 
 # --- Run strategy ---
 with st.spinner("⏳ Detecting trades..."):
-    trades = run_strategy(df)
+    trades = run_strategy(df, caps)
 
 if trades.empty:
     st.warning("⚠️ No trades found.")
