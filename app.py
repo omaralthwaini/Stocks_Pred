@@ -141,33 +141,54 @@ for emoji in sorted_emojis:
 
             st.markdown(f"### {symbol_disp} — Entry: {row['entry_date'].date()} @ ${row['entry']:.2f}")
 
-            # ✅ Candlestick chart
+            # ✅ Candlestick chart + 5% Target Line
             fig = go.Figure()
+
+            # Candlestick
             fig.add_trace(go.Candlestick(
                 x=df_sym["date"], open=df_sym["open"], high=df_sym["high"],
                 low=df_sym["low"], close=df_sym["close"], name="Price"
             ))
+
+            # SMAs
             for w in [10, 20, 50, 200]:
                 fig.add_trace(go.Scatter(x=df_sym["date"], y=df_sym[f"sma_{w}"], mode="lines", name=f"SMA-{w}"))
+
+            # 🎯 Add 5% target line
+            target_price = row["entry"] * 1.05
+            fig.add_trace(go.Scatter(
+                x=df_sym["date"],
+                y=[target_price] * len(df_sym),
+                mode="lines",
+                name="🎯 Target +5%",
+                line=dict(dash="dash", color="green")
+            ))
 
             fig.update_layout(
                 height=500, margin=dict(l=10, r=10, t=30, b=10),
                 showlegend=True, xaxis_title="Date", yaxis_title="Price",
                 xaxis_rangeslider_visible=False
             )
+
             st.plotly_chart(fig, use_container_width=True)
 
-            # 🆕 Summary block with sector included
+            # 🎯 Distance to Target
+            distance_to_target = (row["latest_close"] / target_price - 1) * 100
+
+            # Trade summary with target info
             st.markdown(f"""
             - 🏢 **Sector**: {row['sector']}
             - 🗓 **Days Since Entry**: {(df_sym['date'].max() - row['entry_date']).days}
             - ⛔ **Stop Loss**: ${row["stop_loss"]:.2f}
             - 💵 **Latest Close**: ${row["latest_close"]:.2f}
+            - 🎯 **Target (5%)**: ${target_price:.2f}
+            - 📐 **Distance to Target**: {distance_to_target:.2f}%
             - 📉 **Min Low Since Entry**: ${row["min_low"]:.2f}
             - 📈 **Max High Since Entry**: ${row["max_high"]:.2f}
             - 💹 **Unrealized Return**: {row["unrealized_pct_return"]:.2f}%
             """)
 
+            # Return strength label
             if row["unrealized_pct_return"] >= 10:
                 st.success("🟢 Strong Position")
             elif row["unrealized_pct_return"] >= 0:
