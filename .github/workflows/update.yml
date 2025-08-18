@@ -1,3 +1,13 @@
+name: Auto Update Stocks
+
+on:
+  schedule:
+    - cron: '30 14-21 * * 1-5'  # every hour from 9:30 AM–4:30 PM ET (Mon–Fri)
+  workflow_dispatch:            # manual trigger enabled
+
+permissions:
+  contents: write               # required for pushing changes
+
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -23,7 +33,7 @@ jobs:
           git commit -m "📈 Auto-update stocks.csv from workflow" || echo "No changes to commit"
           git push
 
-      - name: Send Trade Summary Email  # ✅ Moved AFTER git push
+      - name: Send Trade Summary Email
         run: python send_email.py
         env:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
