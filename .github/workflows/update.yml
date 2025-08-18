@@ -3,7 +3,7 @@ name: Auto Update Stocks
 on:
   schedule:
     - cron: '30 14-21 * * 1-5'  # every hour from 9:30 AM–4:30 PM ET (Mon–Fri)
-    - cron: '40 21 * * 1-5'     # ✅ extra run at 4:40 PM ET to catch full close
+    - cron: '50 21 * * 1-5'     # ✅ extra run at 4:50 PM ET to catch full close
   workflow_dispatch:            # manual trigger enabled
 
 permissions:
