@@ -14,7 +14,7 @@ def run_strategy(df, caps, k_days_rising=3, eps=1e-6):
         for w in [10, 20, 50, 200]:
             df_sym[f"sma_{w}"] = df_sym["close"].rolling(w, min_periods=w).mean()
 
-        # --- Rising SMA flags
+        # --- Rising SMA flags ---
         for w in [10, 20, 50]:
             inc = df_sym[f"sma_{w}"].diff() > eps
             df_sym[f"sma_{w}_up"] = (
@@ -27,12 +27,9 @@ def run_strategy(df, caps, k_days_rising=3, eps=1e-6):
         df_sym["sma_up_all"] = df_sym[[f"sma_{w}_up" for w in [10, 20, 50]]].all(axis=1)
         df_sym["ready"] = ~df_sym[[f"sma_{w}" for w in [10, 20, 50, 200]]].isna().any(axis=1)
 
-        cap_score = cap_scores.get(sym, 1)
-
         i = 0
         while i < len(df_sym):
             row = df_sym.iloc[i]
-
             is_green = row["close"] > row["open"]
 
             if row["ready"] and row["above_smas"] and row["sma_up_all"] and is_green:
@@ -46,19 +43,12 @@ def run_strategy(df, caps, k_days_rising=3, eps=1e-6):
                     future = df_sym.iloc[j]
                     price = future["close"]
 
-                    # Exit by SMA break
+                    # ✅ Exit by SMA break only
                     below_count = sum(price < future[f"sma_{w}"] for w in [10, 20, 50, 200])
                     if below_count >= 2:
                         exit_date = future["date"]
                         exit_price = price
                         exit_reason = "sma_below_2"
-                        break
-
-                    # Exit by 5% profit for cap_score 3/4/5
-                    if cap_score in [3, 4, 5] and price >= entry_price * 1.05:
-                        exit_date = future["date"]
-                        exit_price = price
-                        exit_reason = "profit_5pct"
                         break
 
                 trades.append({
@@ -76,8 +66,8 @@ def run_strategy(df, caps, k_days_rising=3, eps=1e-6):
                 })
 
                 if exit_date is None:
-                    break  # stop if still open
-                i = j + 1  # jump past the exit candle
+                    break
+                i = j + 1
             else:
                 i += 1
 
