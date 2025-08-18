@@ -2,8 +2,11 @@ name: Auto Update Stocks
 
 on:
   schedule:
-    - cron: '30 14-21 * * 1-5'  # 9:30am–4:30pm ET (every hour)
-  workflow_dispatch:  # optional manual trigger
+    - cron: '30 14-21 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write  # ← Required for pushing changes
 
 jobs:
   update:
@@ -17,16 +20,15 @@ jobs:
 
       - run: pip install pandas requests pytz
 
-      # Run the main script that updates stocks
-      - run: python Automation.py
+      - name: Run stock update
+        run: python Automation.py
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
 
-      # Send email summary
-      - run: python send_email.py
-        env:
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          EMAIL_SMTP_HOST: ${{ secrets.EMAIL_SMTP_HOST }}
-          EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
+      - name: Commit and Push changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add stocks.csv
+          git commit -m "📈 Auto-update stocks.csv from workflow" || echo "No changes to commit"
+          git push
