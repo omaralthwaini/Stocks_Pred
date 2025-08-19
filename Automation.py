@@ -6,10 +6,8 @@ from datetime import datetime, timedelta
 import pytz
 import subprocess
 
-# Polygon API Key from environment (in GitHub Actions, use repo secret)
+# --- Get API key ---
 POLYGON_KEY = os.getenv("POLYGON_API_KEY", "")
-
-# Abort if key is missing
 if not POLYGON_KEY:
     raise EnvironmentError("POLYGON_API_KEY is not set.")
 
@@ -35,7 +33,7 @@ symbol_sector_map = (
     .reset_index(drop=True)
 )
 
-# --- Date range: today + yesterday only ---
+# --- Date range: yesterday + today ---
 today = datetime.now().date()
 yesterday = today - timedelta(days=1)
 start_date = yesterday.strftime("%Y-%m-%d")
@@ -66,7 +64,7 @@ def fetch_polygon_daily(symbol, start, end):
     df["symbol"] = symbol
     return df
 
-# --- Fetch and collect data ---
+# --- Collect data ---
 all_frames = []
 for i, row in symbol_sector_map.iterrows():
     symbol, sector = row["symbol"], row["sector"]
@@ -75,27 +73,29 @@ for i, row in symbol_sector_map.iterrows():
     if not df_new.empty:
         df_new["sector"] = sector
         all_frames.append(df_new)
-    time.sleep(0.3)  # Light delay to be respectful
+    time.sleep(0.3)
 
-# --- Update local file ---
+# --- Overwrite logic ---
 if all_frames:
     new_data = pd.concat(all_frames, ignore_index=True)
 
-    # Determine the dates in the new data (usually today and yesterday)
-    overwrite_dates = new_data["date"].dt.normalize().unique()
+    # Normalize both to ensure match
+    new_data["date"] = new_data["date"].dt.normalize()
+    existing_df["date"] = existing_df["date"].dt.normalize()
 
-    # Drop old records from those dates
-    existing_cleaned = existing_df[~existing_df["date"].dt.normalize().isin(overwrite_dates)]
+    # Remove existing (symbol, date) rows that will be replaced
+    overwrite_keys = set(zip(new_data["symbol"], new_data["date"]))
+    existing_filtered = existing_df[~existing_df[["symbol", "date"]].apply(tuple, axis=1).isin(overwrite_keys)]
 
-    # Combine new + old (excluding overwritten), then sort
-    combined = pd.concat([existing_cleaned, new_data], ignore_index=True)
+    # Combine new + existing (existing comes after new)
+    combined = pd.concat([new_data, existing_filtered], ignore_index=True)
     combined = combined.sort_values(["symbol", "date"])
 
-    # Save final output
+    # Save updated file
     combined.to_csv("stocks.csv", index=False)
-    print(f"\n✅ stocks.csv updated with {len(new_data)} new rows after overwriting {len(overwrite_dates)} date(s).")
+    print(f"\n✅ stocks.csv updated with {len(new_data)} new rows. Total rows: {len(combined)}")
 
-    # --- Optional GitHub Auto Push ---
+    # --- Push to GitHub ---
     try:
         subprocess.run(["git", "config", "user.name", "Auto Bot"], check=True)
         subprocess.run(["git", "config", "user.email", "bot@example.com"], check=True)
