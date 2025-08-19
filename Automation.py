@@ -80,12 +80,20 @@ for i, row in symbol_sector_map.iterrows():
 # --- Update local file ---
 if all_frames:
     new_data = pd.concat(all_frames, ignore_index=True)
-    combined = pd.concat([existing_df, new_data], ignore_index=True)
-    combined = combined.drop_duplicates(subset=["symbol", "date"], keep="last")
-    
-    # Overwrite file
+
+    # Determine the dates in the new data (usually today and yesterday)
+    overwrite_dates = new_data["date"].dt.normalize().unique()
+
+    # Drop old records from those dates
+    existing_cleaned = existing_df[~existing_df["date"].dt.normalize().isin(overwrite_dates)]
+
+    # Combine new + old (excluding overwritten), then sort
+    combined = pd.concat([existing_cleaned, new_data], ignore_index=True)
+    combined = combined.sort_values(["symbol", "date"])
+
+    # Save final output
     combined.to_csv("stocks.csv", index=False)
-    print(f"\n✅ stocks.csv updated with {len(new_data)} new rows.")
+    print(f"\n✅ stocks.csv updated with {len(new_data)} new rows after overwriting {len(overwrite_dates)} date(s).")
 
     # --- Optional GitHub Auto Push ---
     try:
