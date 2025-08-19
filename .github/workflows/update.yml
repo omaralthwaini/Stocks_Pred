@@ -2,34 +2,43 @@ name: Auto Update Stocks
 
 on:
   schedule:
-    - cron: '30 14-21 * * 1-5'  # every hour from 9:30 AM–4:30 PM ET (Mon–Fri)
-    - cron: '50 21 * * 1-5'     # ✅ extra run at 4:50 PM ET to catch full close
-  workflow_dispatch:            # manual trigger enabled
+    - cron: '30 14-21 * * 1-5'   # hourly 09:30–16:30 ET (Mon–Fri)
+    - cron: '50 21 * * 1-5'      # extra run ~16:50 ET to catch final close
+  workflow_dispatch:              # manual trigger
 
 permissions:
-  contents: write               # required for pushing changes
+  contents: write
+
+concurrency:
+  group: auto-update-stocks
+  cancel-in-progress: true
 
 jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # required to push back
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - run: pip install pandas requests pytz
+      - name: Install deps
+        run: pip install pandas requests pytz
 
       - name: Run stock update
         run: python Automation.py
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          # lets manual runs skip the market-hours guard in your script
+          FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Commit and Push changes
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add stocks.csv
           git commit -m "📈 Auto-update stocks.csv from workflow" || echo "No changes to commit"
           git push

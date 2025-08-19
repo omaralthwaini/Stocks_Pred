@@ -17,13 +17,18 @@ et = now_utc.astimezone(pytz.timezone("US/Eastern"))
 weekday = et.weekday()          # 0=Mon, 6=Sun
 mins = et.hour * 60 + et.minute # minutes since midnight ET
 
-market_open = 9 * 60 + 30       # 09:30 = 570
-market_last = 16 * 60 + 45      # 16:45 = 1005
+market_open = 9 * 60 + 30       # 09:30
+market_last = 16 * 60 + 45      # 16:45
 
-print(f"🕒 ET now: {et.strftime('%Y-%m-%d %H:%M')}  (weekday={weekday}, mins={mins})")
-if weekday >= 5 or not (market_open <= mins <= market_last):
+# NEW: allow override
+FORCE_RUN = os.getenv("FORCE_RUN", "").lower() in {"1", "true", "yes"}
+event_name = os.getenv("GITHUB_EVENT_NAME", "").lower()  # set by GitHub Actions
+
+print(f"🕒 ET now: {et.strftime('%Y-%m-%d %H:%M')}  (weekday={weekday}, mins={mins}, event={event_name}, force={FORCE_RUN})")
+if not FORCE_RUN and (weekday >= 5 or not (market_open <= mins <= market_last)):
     print("⏳ Market window closed for updater. Skipping.")
-    raise SystemExit(0)  # exit cleanly so downstream steps can decide what to do
+    raise SystemExit(0)
+
 
 # --- Load existing data ---
 existing_path = "stocks.csv"
