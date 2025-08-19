@@ -111,6 +111,24 @@ if not open_trades.empty:
     st.dataframe(open_trades[[ "symbol_display", "sector", "entry_date", "entry", "latest_close", "stop_loss", "unrealized_pct_return", "min_low", "max_high" ]], use_container_width=True)
     st.download_button("📥 Download Open Trades", open_trades.to_csv(index=False).encode("utf-8"), "open_trades.csv", "text/csv")
 
+# after you compute latest_close and have 'open_trades'
+open_trades = trades[trades["outcome"] == 0].copy()
+open_trades["target_price"] = open_trades["entry"] * 1.05
+open_trades["to_target_pct"] = (open_trades["latest_close"] / open_trades["target_price"] - 1) * 100
+
+near = open_trades.sort_values("to_target_pct", ascending=False)
+near = near[near["to_target_pct"] <= 5]  # within +5% above target still shows as <=5
+near = near.head(15)
+
+st.subheader("🎯 Near Target (+5%) Watchlist")
+if near.empty:
+    st.info("No open positions are close to the +5% target yet.")
+else:
+    st.dataframe(
+        near[["symbol_display","sector","entry_date","entry","latest_close","target_price","to_target_pct"]],
+        use_container_width=True
+    )
+
 # 🕒 Trades in Last 7 Days
 st.subheader("🕒 Trades Entered in the Last 7 Days")
 cutoff = trades["entry_date"].max() - timedelta(days=7)
@@ -128,6 +146,7 @@ recent_exits = trades[
     (trades["exit_date"].notna()) & 
     (trades["exit_date"] >= exit_cutoff)
 ].copy()
+
 
 # Outcome emojis
 def format_exit(row):
@@ -153,6 +172,22 @@ else:
     # Optional download
     csv_exits = recent_exits.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Download Recent Exits", csv_exits, "recent_exits.csv", "text/csv")
+
+# after you build `recent_exits`
+st.subheader("📊 Exit Summary (Last 7 Days)")
+if recent_exits.empty:
+    st.info("No exits in the last 7 days.")
+else:
+    win = (recent_exits["pct_return"] > 0).mean()
+    avg = recent_exits["pct_return"].mean()
+    best = recent_exits["pct_return"].max()
+    worst = recent_exits["pct_return"].min()
+    st.markdown(
+        f"- **Count:** {len(recent_exits)}  "
+        f"- **Win rate:** {win:.0%}  "
+        f"- **Avg return:** {avg:.2f}%  "
+        f"- **Best/Worst:** {best:.2f}% / {worst:.2f}%"
+    )
 
 
 # 🧭 Open Trade Summaries by Capital
