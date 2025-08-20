@@ -2,71 +2,64 @@ import os
 import smtplib
 from email.message import EmailMessage
 from datetime import datetime
+import pytz
 import pandas as pd
+
 from strategy import run_strategy
 
-# --- Load data ---
-df = pd.read_csv("stocks.csv", parse_dates=["date"])
-caps = pd.read_csv("market_cap.csv")
+# ---------- Helpers ----------
+def fmt_money(x):
+    return f"${x:,.2f}" if pd.notna(x) else "—"
 
-# --- Normalize today's date ---
-today = pd.Timestamp.now().normalize()
+def fmt_pct(x):
+    return f"{x:+.2f}%" if pd.notna(x) else "—"
 
-# --- Run strategy and normalize dates ---
-trades = run_strategy(df, caps)
-trades["entry_date"] = pd.to_datetime(trades["entry_date"]).dt.normalize()
-trades["exit_date"] = pd.to_datetime(trades["exit_date"]).dt.normalize()
+def df_to_html_table(df, columns, headers=None):
+    headers = headers or columns
+    # Minimal, inbox-friendly styling
+    styles = """
+      <style>
+        body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+        .wrap { max-width: 820px; margin: 0 auto; }
+        .kpis { display:flex; gap:12px; flex-wrap:wrap; margin: 8px 0 14px; }
+        .chip { border:1px solid #eee; border-radius:8px; padding:8px 10px; background:#fafafa; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { text-align: left; padding: 8px; font-size: 13px; }
+        thead th { border-bottom: 2px solid #ddd; background:#f6f8fa; }
+        tbody tr { border-bottom: 1px solid #eee; }
+        .pos { color: #0a7a0a; font-weight: 600; }
+        .neg { color: #c23232; font-weight: 600; }
+        .muted { color:#666; }
+        h2 { margin: 18px 0 8px; font-size: 18px; }
+        h3 { margin: 12px 0 6px; font-size: 16px; }
+        .foot { color:#888; font-size:12px; margin-top:14px; }
+      </style>
+    """
+    thead = "<thead><tr>" + "".join(f"<th>{h}</th>" for h in headers) + "</tr></thead>"
+    body_rows = []
+    for _, r in df.iterrows():
+        tds = []
+        for c in columns:
+            val = r[c]
+            if c in {"entry", "exit_price", "target_price"}:
+                cell = fmt_money(val)
+            elif c in {"ret_pct"}:
+                cls = "pos" if val and val > 0 else "neg" if val and val < 0 else "muted"
+                cell = f'<span class="{cls}">{fmt_pct(val)}</span>'
+            else:
+                cell = str(val) if pd.notna(val) else "—"
+            tds.append(f"<td>{cell}</td>")
+        body_rows.append("<tr>" + "".join(tds) + "</tr>")
+    tbody = "<tbody>" + "".join(body_rows) + "</tbody>"
+    return styles + f"<table>{thead}{tbody}</table>"
 
-# --- Today's new entries ---
-today_entries = trades[trades["entry_date"] == today]
-
-# --- Today's exits ---
-today_exits = trades[trades["exit_date"] == today]
-
-# --- Build message ---
-lines = []
-
-# --- Section: New Entries ---
-if not today_entries.empty:
-    lines.append(f"📈 {len(today_entries)} new trade(s) opened today:\n")
-    for _, row in today_entries.iterrows():
-        lines.append(f"- {row['symbol']} | Entry: {row['entry_date'].date()} @ ${row['entry']:.2f}")
-else:
-    lines.append("📭 No new trades opened today.\n")
-
-# --- Section: Closed Trades ---
-if not today_exits.empty:
-    lines.append(f"\n📤 {len(today_exits)} trade(s) exited today:\n")
-    for _, row in today_exits.iterrows():
-        entry_price = row["entry"]
-        exit_price = row["exit_price"]
-        pct = ((exit_price / entry_price) - 1) * 100 if entry_price else 0
-        pct_str = f"{pct:+.2f}%"
-
-        # Outcome icon
-        if pct > 0:
-            outcome = "✅ Profit"
-        elif pct < 0:
-            outcome = "❌ Loss"
-        else:
-            outcome = "⚪ Break-even"
-
-        reason = "SMA Cross" if row["exit_reason"] == "sma_below_2" else "Stop Loss"
-        lines.append(f"- {row['symbol']} | Exit: {row['exit_date'].date()} @ ${exit_price:.2f} ({reason}) — {outcome} ({pct_str})")
-else:
-    lines.append("\n📭 No trades exited today.")
-
-# --- Final email ---
-body = "\n".join(lines)
-subject = f"📊 Trade Summary — {today.date()}"
-
-# --- Send email ---
-def send_trade_summary(subject, body):
+def send_email(subject, body_text, body_html):
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = os.environ["EMAIL_USER"]
     msg["To"] = os.environ["EMAIL_TO"]
-    msg.set_content(body)
+    msg.set_content(body_text)
+    msg.add_alternative(body_html, subtype="html")
 
     with smtplib.SMTP(os.environ["EMAIL_SMTP_HOST"], int(os.environ["EMAIL_SMTP_PORT"])) as server:
         server.starttls()
@@ -74,6 +67,125 @@ def send_trade_summary(subject, body):
         server.send_message(msg)
         print("✅ Email sent successfully.")
 
-# --- Trigger if main ---
+# ---------- Load & compute ----------
+df = pd.read_csv("stocks.csv", parse_dates=["date"])
+caps = pd.read_csv("market_cap.csv")
+
+# Use US/Eastern trading day for “today”
+et = datetime.now(pytz.timezone("US/Eastern"))
+trading_day = et.date()
+
+# Strategy
+trades = run_strategy(df, caps)
+
+# Normalize to date-only comparisons
+trades["entry_date"] = pd.to_datetime(trades["entry_date"]).dt.date
+trades["exit_date"]  = pd.to_datetime(trades["exit_date"]).dt.date
+
+# Enrich with sector / cap info
+sector_map   = df[["symbol","sector"]].drop_duplicates().set_index("symbol")["sector"]
+cap_score    = caps.set_index("symbol")["cap_score"]
+cap_emoji    = caps.set_index("symbol")["cap_emoji"]
+
+trades["sector"]     = trades["symbol"].map(sector_map)
+trades["cap_score"]  = trades["symbol"].map(cap_score)
+trades["cap_emoji"]  = trades["symbol"].map(cap_emoji)
+trades["symbol_disp"]= trades.apply(lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r.get("cap_emoji")) else r["symbol"], axis=1)
+
+# Latest close to show current snapshot (not used for exit P/L)
+latest = (df.sort_values("date")
+            .groupby("symbol")
+            .agg(latest_close=("close","last")))
+trades = trades.merge(latest, on="symbol", how="left")
+
+# Today slices
+today_entries = trades.loc[trades["entry_date"] == trading_day].copy()
+today_exits   = trades.loc[trades["exit_date"]  == trading_day].copy()
+
+# Compute exit P/L for today exits
+if not today_exits.empty:
+    today_exits["ret_pct"] = ((today_exits["exit_price"] / today_exits["entry"]) - 1) * 100
+
+# ---------- Build TEXT ----------
+lines = []
+lines.append(f"Daily Trade Summary — {trading_day} (US/Eastern)\n")
+
+# KPI line
+kpi_entries = len(today_entries)
+kpi_exits   = len(today_exits)
+win_rate    = f"{(today_exits['ret_pct'] > 0).mean():.0%}" if kpi_exits else "—"
+avg_ret     = f"{today_exits['ret_pct'].mean():+.2f}%" if kpi_exits else "—"
+lines.append(f"New entries: {kpi_entries} | Exits: {kpi_exits} | Win rate: {win_rate} | Avg exit return: {avg_ret}\n")
+
+# New entries
+if kpi_entries:
+    lines.append("NEW ENTRIES:")
+    for _, r in today_entries.sort_values(["cap_score","symbol"]).iterrows():
+        target = r["entry"] * 1.05 if pd.notna(r["entry"]) else None
+        lines.append(
+            f"- {r['symbol']} ({r.get('sector','—')}) "
+            f"Entry {r['entry_date']} @ {fmt_money(r['entry'])}"
+            + (f" | 5% target: {fmt_money(target)}" if target else "")
+        )
+else:
+    lines.append("No new entries today.")
+
+# Exits
+lines.append("")
+if kpi_exits:
+    lines.append("EXITS:")
+    for _, r in today_exits.sort_values("ret_pct", ascending=False).iterrows():
+        reason = {"sma_below_2": "SMA Cross"}.get(str(r.get("exit_reason")), str(r.get("exit_reason","—")).title())
+        lines.append(
+            f"- {r['symbol']} ({r.get('sector','—')}) "
+            f"Entry {r['entry_date']} @ {fmt_money(r['entry'])} → "
+            f"Exit {r['exit_date']} @ {fmt_money(r['exit_price'])} "
+            f"({reason}) | Return {fmt_pct(r['ret_pct'])}"
+        )
+else:
+    lines.append("No exits today.")
+
+body_text = "\n".join(lines)
+
+# ---------- Build HTML ----------
+header = f"""
+<div class="wrap">
+  <h2>Daily Trade Summary — {trading_day} <span class="muted">(US/Eastern)</span></h2>
+  <div class="kpis">
+    <div class="chip"><strong>New entries:</strong> {kpi_entries}</div>
+    <div class="chip"><strong>Exits:</strong> {kpi_exits}</div>
+    <div class="chip"><strong>Win rate:</strong> {win_rate}</div>
+    <div class="chip"><strong>Avg exit return:</strong> {avg_ret}</div>
+  </div>
+"""
+
+entries_html = ""
+if kpi_entries:
+    df_entries = today_entries.sort_values(["cap_score","symbol"]).copy()
+    df_entries["target_price"] = (df_entries["entry"] * 1.05).round(2)
+    df_entries["cap"] = df_entries.apply(lambda r: f"{r['cap_emoji']} {int(r['cap_score'])}" if pd.notna(r.get("cap_score")) else "—", axis=1)
+
+    cols = ["symbol_disp","sector","cap","entry","target_price"]
+    headers = ["Symbol","Sector","Cap","Entry","Target (+5%)"]
+    entries_html = f"<h3>New Entries ({kpi_entries})</h3>" + df_to_html_table(df_entries, cols, headers)
+
+exits_html = ""
+if kpi_exits:
+    df_exits = today_exits.sort_values("ret_pct", ascending=False).copy()
+    df_exits["reason_print"] = df_exits["exit_reason"].map({"sma_below_2":"SMA Cross"}).fillna(df_exits["exit_reason"].astype(str).str.title())
+    cols = ["symbol_disp","sector","entry_date","exit_date","entry","exit_price","ret_pct","reason_print"]
+    headers = ["Symbol","Sector","Entry Date","Exit Date","Entry","Exit","Return","Reason"]
+    exits_html = f"<h3>Exits ({kpi_exits})</h3>" + df_to_html_table(df_exits, cols, headers)
+
+foot = f"""
+  <div class="foot">Generated at {et.strftime('%Y-%m-%d %H:%M %Z')} • This email includes only trades opened/closed today.</div>
+</div>
+"""
+
+body_html = (entries_html or exits_html) and (entries_html + exits_html) or "<p>No activity today.</p>"
+body_html = header + body_html + foot
+
+# ---------- Subject & Send ----------
+subject = f"📊 Trades — {trading_day} | {kpi_entries} new • {kpi_exits} exits"
 if __name__ == "__main__":
-    send_trade_summary(subject, body)
+    send_email(subject, body_text, body_html)
