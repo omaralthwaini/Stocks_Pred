@@ -159,22 +159,22 @@ if not open_trades.empty:
 open_trades_nt = trades[trades["outcome"] == 0].copy()
 
 # 5% target + distances
-open_trades_nt["target_price"]       = open_trades_nt["entry"] * 1.05
-open_trades_nt["to_target_pct"]      = (open_trades_nt["latest_close"] / open_trades_nt["target_price"] - 1) * 100
-open_trades_nt["overall_return_pct"] = (open_trades_nt["latest_close"] / open_trades_nt["entry"] - 1) * 100
+open_trades_nt["target_price"]        = open_trades_nt["entry"] * 1.05
+open_trades_nt["to_target_pct"]       = (open_trades_nt["latest_close"] / open_trades_nt["target_price"] - 1) * 100
+open_trades_nt["overall_return_pct"]  = (open_trades_nt["latest_close"] / open_trades_nt["entry"] - 1) * 100
 
-# attach per-ticker historical performance (built above from CLOSED trades)
-open_trades_nt["ticker_win_rate"]   = open_trades_nt["symbol"].map(win_rate_map)
-open_trades_nt["ticker_avg_return"] = open_trades_nt["symbol"].map(avg_return_map)
-open_trades_nt["ticker_n_closed"]   = open_trades_nt["symbol"].map(n_closed_map).fillna(0).astype(int)
+# attach per-ticker historical performance (from CLOSED trades you computed earlier)
+open_trades_nt["ticker_win_rate"]     = open_trades_nt["symbol"].map(win_rate_map)
+open_trades_nt["ticker_avg_return"]   = open_trades_nt["symbol"].map(avg_return_map)
+open_trades_nt["ticker_n_closed"]     = open_trades_nt["symbol"].map(n_closed_map).fillna(0).astype(int)
 
-# pretty strings for display
-open_trades_nt["win_rate_display"]  = open_trades_nt["ticker_win_rate"].apply(lambda x: fmt_pct(x, 0))
-open_trades_nt["avg_ret_display"]   = open_trades_nt["ticker_avg_return"].apply(lambda x: fmt_pct_abs(x, 2))
+# pretty strings
+open_trades_nt["win_rate_display"]    = open_trades_nt["ticker_win_rate"].apply(lambda x: fmt_pct(x, 0))
+open_trades_nt["avg_ret_display"]     = open_trades_nt["ticker_avg_return"].apply(lambda x: fmt_pct_abs(x, 2))
 
 # pick the ones within +5% above target (and below it)
-near = (open_trades_nt.sort_values("to_target_pct", ascending=False)
-                      .loc[open_trades_nt["to_target_pct"] <= 5]
+near = (open_trades_nt.loc[open_trades_nt["to_target_pct"] <= 5]
+                      .sort_values("to_target_pct", ascending=False)
                       .head(15))
 
 st.subheader("🎯 Near Target (+5%) Watchlist")
@@ -186,16 +186,14 @@ else:
         "target_price","overall_return_pct","to_target_pct",
         "win_rate_display","avg_ret_display","ticker_n_closed"
     ]
-    st.dataframe(
-        near.reindex(columns=display_cols).rename(columns={
-            "overall_return_pct": "Overall return",
-            "to_target_pct": "Distance to 5% target",
-            "win_rate_display": "Win rate (hist.)",
-            "avg_ret_display":  "Avg return (hist.)",
-            "ticker_n_closed":  "# closed"
-        }),
-        use_container_width=True
-    )
+    table = near.reindex(columns=display_cols).rename(columns={
+        "overall_return_pct": "Overall return",
+        "to_target_pct": "Distance to 5% target",
+        "win_rate_display": "Win rate (hist.)",
+        "avg_ret_display":  "Avg return (hist.)",
+        "ticker_n_closed":  "# closed"
+    })
+    st.dataframe(table, use_container_width=True)
 
 
 # --- Recent entries (7 days) ---
