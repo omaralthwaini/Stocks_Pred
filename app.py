@@ -57,19 +57,6 @@ trades["final_pct"] = trades.apply(
     lambda r: r["pct_return"] if pd.notna(r["exit_price"]) else r["unrealized_pct_return"],
     axis=1
 )
-# --- Per-ticker historical performance from CLOSED trades ---
-closed = trades[trades["exit_date"].notna()].copy()
-if not closed.empty:
-    closed["win"] = closed["pct_return"] > 0
-    perf = (closed.groupby("symbol")
-                  .agg(win_rate=("win", "mean"),          # 0..1
-                       avg_return=("pct_return", "mean"),  # %
-                       n_closed=("pct_return", "size"))
-                  .reset_index())
-else:
-    perf = pd.DataFrame(columns=["symbol", "win_rate", "avg_return", "n_closed"])
-
-
 
 # --- Emoji symbol display ---
 trades["symbol_display"] = trades.apply(
@@ -130,45 +117,26 @@ if not open_trades.empty:
     )
 
 # --- Near Target (+5%) Watchlist ---
-open_trades_nt = trades.loc[trades["outcome"] == 0].copy()
-
-# Targets & distances
-open_trades_nt["target_price"]        = open_trades_nt["entry"] * 1.05
-open_trades_nt["to_target_pct"]       = (open_trades_nt["latest_close"] / open_trades_nt["target_price"] - 1) * 100
-open_trades_nt["overall_return_pct"]  = (open_trades_nt["latest_close"] / open_trades_nt["entry"] - 1) * 100
-
-# Attach per-ticker historical perf (merge so columns ALWAYS exist)
-near = open_trades_nt.merge(perf, on="symbol", how="left")
-
-# Pretty display fields
-near["win_rate_display"] = near["win_rate"].apply(lambda x: "—" if pd.isna(x) else f"{x*100:.0f}%")
-near["avg_ret_display"]  = near["avg_return"].apply(lambda x: "—" if pd.isna(x) else f"{x:.2f}%")
-near["ticker_n_closed"]  = near["n_closed"].fillna(0).astype(int)
-
-# Keep the ones closest to target (<= +5% above target), show top 15
-near = (near.loc[near["to_target_pct"] <= 5]
-            .sort_values("to_target_pct", ascending=False)
-            .head(15))
+open_trades = trades[trades["outcome"] == 0].copy()
+open_trades["target_price"] = open_trades["entry"] * 1.05
+open_trades["to_target_pct"] = (open_trades["latest_close"] / open_trades["target_price"] - 1) * 100
+near = open_trades.sort_values("to_target_pct", ascending=False)
+near = near[near["to_target_pct"] <= 5].head(15)
 
 st.subheader("🎯 Near Target (+5%) Watchlist")
 if near.empty:
     st.info("No open positions are close to the +5% target yet.")
 else:
-    display_cols = [
-        "symbol_display","sector","entry_date","entry","latest_close",
-        "target_price","overall_return_pct","to_target_pct",
-        "win_rate_display","avg_ret_display","ticker_n_closed"
-    ]
-    table = near.reindex(columns=display_cols).rename(columns={
-        "overall_return_pct": "Overall return",
-        "to_target_pct":      "Distance to 5% target",
-        "win_rate_display":   "Win rate (hist.)",
-        "avg_ret_display":    "Avg return (hist.)",
-        "ticker_n_closed":    "# closed"
-    })
-    st.dataframe(table, use_container_width=True)
-
-
+    # show overall return, not relative-to-target
+    near["overall_return_pct"] = (near["latest_close"] / near["entry"] - 1) * 100
+    st.dataframe(
+        near[[
+            "symbol_display", "sector", "entry_date", "entry",
+            "latest_close", "target_price",
+            "overall_return_pct", "to_target_pct"
+        ]],
+        use_container_width=True
+    )
 
 # --- Recent entries (7 days) ---
 st.subheader("🕒 Trades Entered in the Last 7 Days")
