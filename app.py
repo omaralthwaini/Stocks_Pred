@@ -58,6 +58,30 @@ trades["final_pct"] = trades.apply(
     axis=1
 )
 
+# --- Per-ticker performance from CLOSED trades ---
+closed = trades[trades["exit_date"].notna()].copy()
+if not closed.empty:
+    closed["win"] = closed["pct_return"] > 0
+    perf = (closed.groupby("symbol")
+                  .agg(win_rate=("win", "mean"),
+                       avg_return=("pct_return", "mean"),
+                       n_closed=("pct_return", "size"))
+                  .reset_index())
+else:
+    perf = pd.DataFrame(columns=["symbol", "win_rate", "avg_return", "n_closed"])
+
+# maps for quick lookup
+win_rate_map   = perf.set_index("symbol")["win_rate"].to_dict()      # 0..1
+avg_return_map = perf.set_index("symbol")["avg_return"].to_dict()    # %
+n_closed_map   = perf.set_index("symbol")["n_closed"].to_dict()
+
+def fmt_pct(p, digits=0):
+    return "—" if pd.isna(p) else f"{p*100:.{digits}f}%"
+
+def fmt_pct_abs(p, digits=2):
+    return "—" if pd.isna(p) else f"{p:.{digits}f}%"
+
+
 # --- Emoji symbol display ---
 trades["symbol_display"] = trades.apply(
     lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r["cap_emoji"]) else r["symbol"],
@@ -99,15 +123,30 @@ for sector in trades["sector"].dropna().unique():
         )
 
 # --- Open trades table ---
-open_trades = trades[trades["outcome"] == 0].sort_values("entry_date", ascending=False)
+# --- Open trades table ---
+open_trades = trades[trades["outcome"] == 0].sort_values("entry_date", ascending=False).copy()
+# attach historical performance per symbol
+open_trades["ticker_win_rate"]   = open_trades["symbol"].map(win_rate_map)    # 0..1
+open_trades["ticker_avg_return"] = open_trades["symbol"].map(avg_return_map)  # %
+open_trades["ticker_n_closed"]   = open_trades["symbol"].map(n_closed_map)
+
 st.subheader(f"🔓 All Open Trades ({len(open_trades)})")
 if not open_trades.empty:
+    # pretty strings for display
+    open_trades["win_rate_display"] = open_trades["ticker_win_rate"].apply(lambda x: fmt_pct(x, 0))
+    open_trades["avg_ret_display"]  = open_trades["ticker_avg_return"].apply(lambda x: fmt_pct_abs(x, 2))
+
     st.dataframe(
         open_trades[[
             "symbol_display", "sector", "entry_date", "entry",
             "latest_close", "stop_loss", "unrealized_pct_return",
-            "min_low", "max_high"
-        ]],
+            "min_low", "max_high",
+            "win_rate_display", "avg_ret_display", "ticker_n_closed"
+        ]].rename(columns={
+            "win_rate_display": "Win rate (hist.)",
+            "avg_ret_display":  "Avg return (hist.)",
+            "ticker_n_closed":  "# closed"
+        }),
         use_container_width=True
     )
     st.download_button(
@@ -116,25 +155,39 @@ if not open_trades.empty:
         "open_trades.csv", "text/csv"
     )
 
+
 # --- Near Target (+5%) Watchlist ---
-open_trades = trades[trades["outcome"] == 0].copy()
-open_trades["target_price"] = open_trades["entry"] * 1.05
-open_trades["to_target_pct"] = (open_trades["latest_close"] / open_trades["target_price"] - 1) * 100
-near = open_trades.sort_values("to_target_pct", ascending=False)
-near = near[near["to_target_pct"] <= 5].head(15)
+# --- Near Target (+5%) Watchlist ---
+open_trades_nt = trades[trades["outcome"] == 0].copy()
+open_trades_nt["target_price"]  = open_trades_nt["entry"] * 1.05
+open_trades_nt["to_target_pct"] = (open_trades_nt["latest_close"] / open_trades_nt["target_price"] - 1) * 100
+open_trades_nt["overall_return_pct"] = (open_trades_nt["latest_close"] / open_trades_nt["entry"] - 1) * 100
+# attach perf
+open_trades_nt["ticker_win_rate"]   = open_trades_nt["symbol"].map(win_rate_map)
+open_trades_nt["ticker_avg_return"] = open_trades_nt["symbol"].map(avg_return_map)
+open_trades_nt["win_rate_display"]  = open_trades_nt["ticker_win_rate"].apply(lambda x: fmt_pct(x, 0))
+open_trades_nt["avg_ret_display"]   = open_trades_nt["ticker_avg_return"].apply(lambda x: fmt_pct_abs(x, 2))
+
+near = (open_trades_nt.sort_values("to_target_pct", ascending=False)
+                    .loc[open_trades_nt["to_target_pct"] <= 5]
+                    .head(15))
 
 st.subheader("🎯 Near Target (+5%) Watchlist")
 if near.empty:
     st.info("No open positions are close to the +5% target yet.")
 else:
-    # show overall return, not relative-to-target
-    near["overall_return_pct"] = (near["latest_close"] / near["entry"] - 1) * 100
     st.dataframe(
         near[[
-            "symbol_display", "sector", "entry_date", "entry",
-            "latest_close", "target_price",
-            "overall_return_pct", "to_target_pct"
-        ]],
+            "symbol_display","sector","entry_date","entry","latest_close",
+            "target_price","overall_return_pct","to_target_pct",
+            "win_rate_display","avg_ret_display","ticker_n_closed"
+        ]].rename(columns={
+            "overall_return_pct": "Overall return",
+            "to_target_pct": "Distance to 5% target",
+            "win_rate_display": "Win rate (hist.)",
+            "avg_ret_display": "Avg return (hist.)",
+            "ticker_n_closed": "# closed"
+        }),
         use_container_width=True
     )
 
@@ -241,6 +294,13 @@ for emoji in sorted_emojis:
             st.plotly_chart(fig, use_container_width=True)
 
             distance_to_target = (r["latest_close"] / target_price - 1) * 100
+            # Historical perf for this ticker
+            sym_wr = win_rate_map.get(sym)
+            sym_ar = avg_return_map.get(sym)
+            sym_nc = n_closed_map.get(sym, 0)
+            wr_txt = fmt_pct(sym_wr, 0)
+            ar_txt = fmt_pct_abs(sym_ar, 2)
+
             st.markdown(f"""
             - 🏢 **Sector**: {r['sector']}
             - 🗓 **Days Since Entry**: {(df_sym['date'].max() - r['entry_date']).days}
@@ -251,6 +311,9 @@ for emoji in sorted_emojis:
             - 📉 **Min Low Since Entry**: ${r["min_low"]:.2f}
             - 📈 **Max High Since Entry**: ${r["max_high"]:.2f}
             - 💹 **Unrealized Return**: {r["unrealized_pct_return"]:.2f}%
+            - 📈 **Ticker win rate (closed)**: {wr_txt} across {sym_nc} trade(s)
+            - 📊 **Ticker avg return (closed)**: {ar_txt}
+
             """)
 
             if r["unrealized_pct_return"] >= 10:
