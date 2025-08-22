@@ -155,38 +155,41 @@ if not open_trades.empty:
         "open_trades.csv", "text/csv"
     )
 
-
-# --- Near Target (+5%) Watchlist ---
 # --- Near Target (+5%) Watchlist ---
 open_trades_nt = trades[trades["outcome"] == 0].copy()
-open_trades_nt["target_price"]  = open_trades_nt["entry"] * 1.05
-open_trades_nt["to_target_pct"] = (open_trades_nt["latest_close"] / open_trades_nt["target_price"] - 1) * 100
+open_trades_nt["target_price"]      = open_trades_nt["entry"] * 1.05
+open_trades_nt["to_target_pct"]     = (open_trades_nt["latest_close"] / open_trades_nt["target_price"] - 1) * 100
 open_trades_nt["overall_return_pct"] = (open_trades_nt["latest_close"] / open_trades_nt["entry"] - 1) * 100
-# attach perf
-open_trades_nt["ticker_win_rate"]   = open_trades_nt["symbol"].map(win_rate_map)
-open_trades_nt["ticker_avg_return"] = open_trades_nt["symbol"].map(avg_return_map)
+
+# attach per-ticker historical performance
+open_trades_nt["ticker_win_rate"]   = open_trades_nt["symbol"].map(win_rate_map)        # 0..1
+open_trades_nt["ticker_avg_return"] = open_trades_nt["symbol"].map(avg_return_map)      # %
+open_trades_nt["ticker_n_closed"]   = open_trades_nt["symbol"].map(n_closed_map).fillna(0).astype(int)
+
+# pretty strings
 open_trades_nt["win_rate_display"]  = open_trades_nt["ticker_win_rate"].apply(lambda x: fmt_pct(x, 0))
 open_trades_nt["avg_ret_display"]   = open_trades_nt["ticker_avg_return"].apply(lambda x: fmt_pct_abs(x, 2))
 
 near = (open_trades_nt.sort_values("to_target_pct", ascending=False)
-                    .loc[open_trades_nt["to_target_pct"] <= 5]
-                    .head(15))
+                      .loc[open_trades_nt["to_target_pct"] <= 5]
+                      .head(15))
 
 st.subheader("🎯 Near Target (+5%) Watchlist")
 if near.empty:
     st.info("No open positions are close to the +5% target yet.")
 else:
+    display_cols = [
+        "symbol_display","sector","entry_date","entry","latest_close",
+        "target_price","overall_return_pct","to_target_pct",
+        "win_rate_display","avg_ret_display","ticker_n_closed"
+    ]
     st.dataframe(
-        near[[
-            "symbol_display","sector","entry_date","entry","latest_close",
-            "target_price","overall_return_pct","to_target_pct",
-            "win_rate_display","avg_ret_display","ticker_n_closed"
-        ]].rename(columns={
+        near.reindex(columns=display_cols).rename(columns={
             "overall_return_pct": "Overall return",
             "to_target_pct": "Distance to 5% target",
             "win_rate_display": "Win rate (hist.)",
-            "avg_ret_display": "Avg return (hist.)",
-            "ticker_n_closed": "# closed"
+            "avg_ret_display":  "Avg return (hist.)",
+            "ticker_n_closed":  "# closed"
         }),
         use_container_width=True
     )
