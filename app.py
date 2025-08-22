@@ -57,9 +57,8 @@ trades["final_pct"] = trades.apply(
     lambda r: r["pct_return"] if pd.notna(r["exit_price"]) else r["unrealized_pct_return"],
     axis=1
 )
-# --- Per-ticker performance from CLOSED trades (for stats columns) ---
+# --- Per-ticker performance from CLOSED trades ---
 closed = trades[trades["exit_date"].notna()].copy()
-
 if not closed.empty:
     closed["win"] = closed["pct_return"] > 0
     perf = (closed.groupby("symbol")
@@ -70,7 +69,7 @@ if not closed.empty:
 else:
     perf = pd.DataFrame(columns=["symbol", "win_rate", "avg_return", "n_closed"])
 
-# quick lookup maps
+# lookup maps
 win_rate_map   = perf.set_index("symbol")["win_rate"].to_dict()
 avg_return_map = perf.set_index("symbol")["avg_return"].to_dict()
 n_closed_map   = perf.set_index("symbol")["n_closed"].to_dict()
@@ -80,6 +79,7 @@ def _fmt_pct01(x, digits=0):
 
 def _fmt_pct(x, digits=2):
     return "—" if pd.isna(x) else f"{x:.{digits}f}%"
+
 
 # --- Emoji symbol display ---
 trades["symbol_display"] = trades.apply(
@@ -142,21 +142,21 @@ if not open_trades.empty:
 # --- Near Target (+5%) Watchlist ---
 open_trades_nt = trades[trades["outcome"] == 0].copy()
 
-# 5% target + distances
-open_trades_nt["target_price"]        = open_trades_nt["entry"] * 1.05
-open_trades_nt["to_target_pct"]       = (open_trades_nt["latest_close"] / open_trades_nt["target_price"] - 1) * 100
-open_trades_nt["overall_return_pct"]  = (open_trades_nt["latest_close"] / open_trades_nt["entry"] - 1) * 100
+# target & distances
+open_trades_nt["target_price"]         = open_trades_nt["entry"] * 1.05
+open_trades_nt["to_target_pct"]        = (open_trades_nt["latest_close"] / open_trades_nt["target_price"] - 1) * 100
+open_trades_nt["overall_return_pct"]   = (open_trades_nt["latest_close"] / open_trades_nt["entry"] - 1) * 100
 
-# attach per-ticker historical performance (from CLOSED trades)
-open_trades_nt["ticker_win_rate"]     = open_trades_nt["symbol"].map(win_rate_map)        # 0..1
-open_trades_nt["ticker_avg_return"]   = open_trades_nt["symbol"].map(avg_return_map)      # %
-open_trades_nt["ticker_n_closed"]     = open_trades_nt["symbol"].map(n_closed_map).fillna(0).astype(int)
+# attach per-ticker historical performance
+open_trades_nt["ticker_win_rate"]      = open_trades_nt["symbol"].map(win_rate_map)       # 0..1
+open_trades_nt["ticker_avg_return"]    = open_trades_nt["symbol"].map(avg_return_map)     # %
+open_trades_nt["ticker_n_closed"]      = open_trades_nt["symbol"].map(n_closed_map).fillna(0).astype(int)
 
 # pretty strings
-open_trades_nt["win_rate_display"]    = open_trades_nt["ticker_win_rate"].apply(lambda x: _fmt_pct01(x, 0))
-open_trades_nt["avg_ret_display"]     = open_trades_nt["ticker_avg_return"].apply(lambda x: _fmt_pct(x, 2))
+open_trades_nt["win_rate_display"]     = open_trades_nt["ticker_win_rate"].apply(lambda x: _fmt_pct01(x, 0))
+open_trades_nt["avg_ret_display"]      = open_trades_nt["ticker_avg_return"].apply(lambda x: _fmt_pct(x, 2))
 
-# filter: within +5% above target (and below it), closest first
+# filter closest to the 5% target (≤ +5% above target)
 near = (open_trades_nt.loc[open_trades_nt["to_target_pct"] <= 5]
                       .sort_values("to_target_pct", ascending=False)
                       .head(15))
@@ -166,19 +166,19 @@ if near.empty:
     st.info("No open positions are close to the +5% target yet.")
 else:
     display_cols = [
-        "symbol_display", "sector", "entry_date", "entry", "latest_close",
-        "target_price", "overall_return_pct", "to_target_pct",
-        "win_rate_display", "avg_ret_display", "ticker_n_closed"
+        "symbol_display","sector","entry_date","entry","latest_close",
+        "target_price","overall_return_pct","to_target_pct",
+        "win_rate_display","avg_ret_display","ticker_n_closed"
     ]
-    # safer than near[[...]]: reindex won’t throw if anything is missing
     table = near.reindex(columns=display_cols).rename(columns={
         "overall_return_pct": "Overall return",
-        "to_target_pct": "Distance to 5% target",
-        "win_rate_display": "Win rate (hist.)",
-        "avg_ret_display":  "Avg return (hist.)",
-        "ticker_n_closed":  "# closed"
+        "to_target_pct":      "Distance to 5% target",
+        "win_rate_display":   "Win rate (hist.)",
+        "avg_ret_display":    "Avg return (hist.)",
+        "ticker_n_closed":    "# closed"
     })
     st.dataframe(table, use_container_width=True)
+
 
 # --- Recent entries (7 days) ---
 st.subheader("🕒 Trades Entered in the Last 7 Days")
