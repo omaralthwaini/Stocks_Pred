@@ -176,9 +176,11 @@ if page == "Home":
         latest["n_closed"]        = latest["symbol"].map(n_closed_map).fillna(0).astype(int)
 
         latest = latest.sort_values(
-            ["entry_date", latest["avg_win_return"].fillna(-1e9)],
-            ascending=[False, False]
+        by=["entry_date", "avg_win_return"],
+        ascending=[False, False],
+        na_position="last"
         )
+
 
         display_cols = [
             "symbol_display","sector","entry_date","entry","latest_close","unrealized_pct_return",
