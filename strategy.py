@@ -1,4 +1,3 @@
-# strategy.py
 import pandas as pd
 import numpy as np
 
@@ -24,11 +23,19 @@ def _prev_day_low_as_stop(df_sym, i):
 
 def run_strategy(df, caps=None, k_days_rising=3, eps=1e-6, body_min=0.003):
     """
-    caps is accepted for API compatibility with the app, but not used here.
-    body_min: minimum body size as (close - open)/open, default 0.3%
+    Entry:
+      • All SMAs (10/20/50/200) available
+      • Close above the max of those SMAs
+      • SMA10/20/50 each rising for k_days_rising
+      • Green candle with minimum body (close-open)/open >= body_min (default 0.3%)
+
+    Exit:
+      • Bar-level stop: if a future bar's LOW < prior-day LOW at entry -> exit next day's OPEN (or same day's CLOSE if last row)
+      • Or if a future CLOSE is below >= 2 of the 10/20/50/200 SMAs -> exit at that CLOSE
     """
     trades = []
 
+    # Ensure df is sorted per symbol
     for sym, g in df.groupby("symbol"):
         df_sym = g.sort_values("date").reset_index(drop=True).copy()
 
@@ -48,7 +55,7 @@ def run_strategy(df, caps=None, k_days_rising=3, eps=1e-6, body_min=0.003):
                 i += 1
                 continue
 
-            # Entry conditions
+            # Entry conditions (trend + price filter)
             if not (df_sym.loc[i, "above_smas"] and df_sym.loc[i, "sma_up_all"]):
                 i += 1
                 continue
@@ -72,23 +79,28 @@ def run_strategy(df, caps=None, k_days_rising=3, eps=1e-6, body_min=0.003):
             exit_price  = None
             exit_reason = "force_close"
 
-            # Manage the trade forward
+            # Manage forward
             for j in range(i + 1, len(df_sym)):
-                # Stop check: if today's low violates stop, exit next day's open if available
-                if stop_price is not None and df_sym.loc[j, "low"] < stop_price:
+                # Stop logic
+                low_j = df_sym.loc[j, "low"]
+                if stop_price is not None and pd.notna(low_j) and low_j < stop_price:
                     if (j + 1) < len(df_sym):
-                        exit_date  = df_sym.loc[j + 1, "date"]
-                        exit_price = float(df_sym.loc[j + 1, "open"])
+                        exit_date   = df_sym.loc[j + 1, "date"]
+                        exit_price  = float(df_sym.loc[j + 1, "open"])
                         exit_reason = "stop_next_open"
                     else:
-                        exit_date  = df_sym.loc[j, "date"]
-                        exit_price = float(df_sym.loc[j, "close"])
+                        exit_date   = df_sym.loc[j, "date"]
+                        exit_price  = float(df_sym.loc[j, "close"])
                         exit_reason = "stop_eod"
                     break
 
-                # SMA breakdown: close below >= 2 SMAs → exit at close
+                # SMA breakdown: close below >= 2 SMAs -> exit at close
                 price = float(df_sym.loc[j, "close"])
-                below_count = sum(price < float(df_sym.loc[j, f"sma_{w}"]) for w in [10, 20, 50, 200])
+                below_count = 0
+                for w in [10, 20, 50, 200]:
+                    sma_val = df_sym.loc[j, f"sma_{w}"]
+                    if pd.notna(sma_val) and price < float(sma_val):
+                        below_count += 1
                 if below_count >= 2:
                     exit_date   = df_sym.loc[j, "date"]
                     exit_price  = price
@@ -109,11 +121,11 @@ def run_strategy(df, caps=None, k_days_rising=3, eps=1e-6, body_min=0.003):
                 ),
             })
 
-            # Stop scanning this symbol if last trade is still open
+            # If still open, stop scanning this symbol
             if exit_date is None:
                 break
 
-            # Jump past exit bar
+            # Jump past the exit bar
             i = j + 1
 
     return pd.DataFrame(trades)
