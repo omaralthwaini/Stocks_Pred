@@ -32,10 +32,10 @@ cap_emoji_map = caps.set_index("symbol")["cap_emoji"]
 trades["sector"]    = trades["symbol"].map(sector_map)
 trades["cap_score"] = trades["symbol"].map(cap_score_map)
 trades["cap_emoji"] = trades["symbol"].map(cap_emoji_map)
+
 # Drop cap_score 3 and 4 from all views
 _cap = pd.to_numeric(trades["cap_score"], errors="coerce")
 trades = trades[~_cap.isin([3, 4])].copy()
-
 
 # --- Latest close per symbol ---
 latest_prices = (
@@ -57,22 +57,30 @@ trades["final_pct"] = trades.apply(
     lambda r: r["pct_return"] if pd.notna(r["exit_price"]) else r["unrealized_pct_return"],
     axis=1
 )
-# --- Per-ticker performance from CLOSED trades ---
+
+# --- Per-ticker performance from CLOSED trades (for historical stats) ---
 closed = trades[trades["exit_date"].notna()].copy()
 if not closed.empty:
     closed["win"] = closed["pct_return"] > 0
+    # days held for closed trades
+    closed["days_held"] = (closed["exit_date"] - closed["entry_date"]).dt.days
+
     perf = (
         closed.groupby("symbol")
-              .agg(win_rate=("win", "mean"),
-                   avg_return=("pct_return", "mean"))
+              .agg(win_rate=("win", "mean"),        # 0..1
+                   avg_return=("pct_return", "mean"),
+                   n_closed=("pct_return", "size"),
+                   avg_days=("days_held", "mean"))
               .reset_index()
     )
 else:
-    perf = pd.DataFrame(columns=["symbol", "win_rate", "avg_return"])
+    perf = pd.DataFrame(columns=["symbol", "win_rate", "avg_return", "n_closed", "avg_days"])
 
 # quick lookup maps
 win_rate_map   = perf.set_index("symbol")["win_rate"].to_dict()     # 0..1
 avg_return_map = perf.set_index("symbol")["avg_return"].to_dict()   # %
+n_closed_map   = perf.set_index("symbol")["n_closed"].to_dict()
+avg_days_map   = perf.set_index("symbol")["avg_days"].to_dict()
 
 # tiny formatters
 def _fmt_pct(p, digits=0):
@@ -80,6 +88,12 @@ def _fmt_pct(p, digits=0):
 
 def _fmt_pct_abs(p, digits=2):
     return "—" if pd.isna(p) else f"{p:.{digits}f}%"
+
+def _add_rownum(df_in):
+    """Return a copy with a 1..N '#' column and hide default index when displaying."""
+    df = df_in.copy()
+    df.insert(0, "#", range(1, len(df) + 1))
+    return df
 
 # --- Emoji symbol display ---
 trades["symbol_display"] = trades.apply(
@@ -129,20 +143,19 @@ for sector in trades["sector"].dropna().unique():
 # ===========================
 # 🔓 Open Trades Table
 # ===========================
-open_trades = trades[trades["outcome"] == 0].sort_values("entry_date", ascending=False)
+open_trades = trades[trades["outcome"] == 0].sort_values("entry_date", ascending=False).copy()
 st.subheader(f"🔓 All Open Trades ({len(open_trades)})")
 if not open_trades.empty:
-    st.dataframe(
-        open_trades[[
-            "symbol_display","sector","entry_date","entry",
-            "latest_close","stop_loss","unrealized_pct_return",
-            "min_low","max_high"
-        ]],
-        use_container_width=True
-    )
+    display_cols = [
+        "symbol_display","sector","entry_date","entry",
+        "latest_close","stop_loss","unrealized_pct_return",
+        "min_low","max_high"
+    ]
+    show_df = _add_rownum(open_trades.loc[:, display_cols])
+    st.dataframe(show_df, use_container_width=True, hide_index=True)
     st.download_button(
         "📥 Download Open Trades",
-        open_trades.to_csv(index=False).encode("utf-8"),
+        show_df.to_csv(index=False).encode("utf-8"),
         "open_trades.csv","text/csv"
     )
 
@@ -163,45 +176,33 @@ st.subheader("🎯 Near Target (+5%) Watchlist")
 if near.empty:
     st.info("No open positions are close to the +5% target yet.")
 else:
-    st.dataframe(
-        near[[
-            "symbol_display","sector","entry_date","entry",
-            "latest_close","target_price","to_target_pct"
-        ]],
-        use_container_width=True
-    )
+    display_cols = [
+        "symbol_display","sector","entry_date","entry",
+        "latest_close","target_price","to_target_pct"
+    ]
+    show_df = _add_rownum(near.loc[:, display_cols])
+    st.dataframe(show_df, use_container_width=True, hide_index=True)
 
 # ===========================
-# --- Trades Entered in the Last 7 Days
+# 🕒 Trades Entered in the Last 7 Days
+# ===========================
 st.subheader("🕒 Trades Entered in the Last 7 Days")
 if trades["entry_date"].notna().any():
     cutoff = trades["entry_date"].max() - timedelta(days=7)
     recent = trades[trades["entry_date"] >= cutoff].copy()
 
     if not recent.empty:
-        # attach per-ticker historical performance
-        recent["ticker_win_rate"]   = recent["symbol"].map(win_rate_map)     # 0..1
-        recent["ticker_avg_return"] = recent["symbol"].map(avg_return_map)   # %
-        recent["win_rate_display"]  = recent["ticker_win_rate"].apply(lambda x: _fmt_pct(x, 0))
-        recent["avg_return_display"] = recent["ticker_avg_return"].apply(lambda x: _fmt_pct_abs(x, 2))
-
         recent = recent.sort_values(["entry_date", "cap_score"], ascending=[False, True])
-
-        st.dataframe(
-            recent[[
-                "symbol_display", "sector", "entry_date", "entry",
-                "exit_price", "exit_date", "stop_loss",
-                "min_low", "max_high", "final_pct",
-                "win_rate_display", "avg_return_display"
-            ]].rename(columns={
-                "win_rate_display":  "Win rate (hist.)",
-                "avg_return_display": "Avg return (hist.)"
-            }),
-            use_container_width=True
-        )
+        display_cols = [
+            "symbol_display","sector","entry_date","entry",
+            "exit_price","exit_date","stop_loss",
+            "min_low","max_high","final_pct"
+        ]
+        show_df = _add_rownum(recent.loc[:, display_cols])
+        st.dataframe(show_df, use_container_width=True, hide_index=True)
         st.download_button(
             "📥 Download Recent Trades",
-            recent.to_csv(index=False).encode("utf-8"),
+            show_df.to_csv(index=False).encode("utf-8"),
             "recent_trades.csv", "text/csv"
         )
     else:
@@ -233,25 +234,77 @@ if recent_exits.empty:
     st.info("📭 No trades exited in the last 7 days.")
 else:
     recent_exits["result"] = recent_exits.apply(_format_exit, axis=1)
-    st.dataframe(
-        recent_exits[[
-            "symbol_display","sector","entry_date","exit_date",
-            "entry","exit_price","exit_reason","result"
-        ]].sort_values("exit_date", ascending=False),
-        use_container_width=True
-    )
+    display_cols = [
+        "symbol_display","sector","entry_date","exit_date",
+        "entry","exit_price","exit_reason","result"
+    ]
+    show_df = _add_rownum(recent_exits.loc[:, display_cols].sort_values("exit_date", ascending=False))
+    st.dataframe(show_df, use_container_width=True, hide_index=True)
 
     st.subheader("📊 Exit Summary (Last 7 Days)")
     win  = (recent_exits["pct_return"] > 0).mean() if not recent_exits.empty else 0.0
-    avg  = recent_exits["pct_return"].mean() if not recent_exits.empty else 0.0
-    best = recent_exits["pct_return"].max() if not recent_exits.empty else 0.0
-    worst= recent_exits["pct_return"].min() if not recent_exits.empty else 0.0
+    avg  = recent_exits["pct_return"].mean()        if not recent_exits.empty else 0.0
+    best = recent_exits["pct_return"].max()         if not recent_exits.empty else 0.0
+    worst= recent_exits["pct_return"].min()         if not recent_exits.empty else 0.0
     st.markdown(
         f"- **Count:** {len(recent_exits)}  "
         f"- **Win rate:** {win:.0%}  "
         f"- **Avg return:** {avg:.2f}%  "
         f"- **Best/Worst:** {best:.2f}% / {worst:.2f}%"
     )
+
+# ===========================
+# 🏆 Top 15 Tickers by Avg Return (Closed Trades)
+# ===========================
+st.subheader("🏆 Top 15 Tickers by Avg Return (Closed Trades)")
+if not closed.empty:
+    best = (
+        closed.groupby("symbol")
+              .agg(
+                  n_trades=("pct_return", "size"),
+                  avg_return=("pct_return", "mean"),
+                  avg_days=("days_held", "mean")
+              )
+              .reset_index()
+    )
+    # enrich with sector & cap emoji
+    best["sector"] = best["symbol"].map(sector_map)
+    best["cap_emoji"] = best["symbol"].map(cap_emoji_map)
+    best["symbol_display"] = best.apply(
+        lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r["cap_emoji"]) else r["symbol"],
+        axis=1
+    )
+    best = best.sort_values("avg_return", ascending=False).head(15)
+
+    # nice formatting (keep as values for CSV)
+    best["avg_return_pct"] = best["avg_return"]
+    best["avg_days_held"]  = best["avg_days"]
+
+    display_cols = ["symbol_display", "sector", "n_trades", "avg_return_pct", "avg_days_held"]
+    show_df = best.loc[:, display_cols].copy()
+    show_df = _add_rownum(show_df)
+    # Pretty strings just for display
+    show_df["avg_return_pct"] = show_df["avg_return_pct"].map(lambda x: f"{x:+.2f}%")
+    show_df["avg_days_held"]  = show_df["avg_days_held"].map(lambda x: f"{x:.1f}")
+
+    st.dataframe(
+        show_df.rename(columns={
+            "n_trades": "Closed trades",
+            "avg_return_pct": "Avg return",
+            "avg_days_held": "Avg days held"
+        }),
+        use_container_width=True, hide_index=True
+    )
+
+    st.download_button(
+        "📥 Download Top 15 (Avg Return)",
+        best.loc[:, ["symbol","sector","n_trades","avg_return","avg_days"]]
+            .rename(columns={"avg_return":"avg_return_pct","avg_days":"avg_days_held"})
+            .to_csv(index=False).encode("utf-8"),
+        "top15_avg_return.csv","text/csv"
+    )
+else:
+    st.info("Not enough closed trades yet to compute historical leaders.")
 
 # ===========================
 # 💲 Open Trade Summaries by Capital
