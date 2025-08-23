@@ -254,11 +254,13 @@ else:
     )
 
 # ===========================
+# ===========================
 # 🏆 Top 15 Tickers by Avg Return (Closed Trades)
 # ===========================
 st.subheader("🏆 Top 15 Tickers by Avg Return (Closed Trades)")
 if not closed.empty:
-    best = (
+    # base aggregates
+    base = (
         closed.groupby("symbol")
               .agg(
                   n_trades=("pct_return", "size"),
@@ -267,6 +269,21 @@ if not closed.empty:
               )
               .reset_index()
     )
+
+    # avg return for winners / losers
+    win_mean = (closed.loc[closed["pct_return"] > 0]
+                        .groupby("symbol")["pct_return"]
+                        .mean()
+                        .rename("avg_win_return"))
+    loss_mean = (closed.loc[closed["pct_return"] < 0]
+                         .groupby("symbol")["pct_return"]
+                         .mean()
+                         .rename("avg_loss_return"))
+
+    best = (base
+            .merge(win_mean, on="symbol", how="left")
+            .merge(loss_mean, on="symbol", how="left"))
+
     # enrich with sector & cap emoji
     best["sector"] = best["symbol"].map(sector_map)
     best["cap_emoji"] = best["symbol"].map(cap_emoji_map)
@@ -274,37 +291,52 @@ if not closed.empty:
         lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r["cap_emoji"]) else r["symbol"],
         axis=1
     )
+
+    # rank & take top 15 by overall avg return
     best = best.sort_values("avg_return", ascending=False).head(15)
 
-    # nice formatting (keep as values for CSV)
-    best["avg_return_pct"] = best["avg_return"]
-    best["avg_days_held"]  = best["avg_days"]
+    # ---- Display (pretty strings) ----
+    disp = best.copy()
+    disp["avg_return_str"]     = disp["avg_return"].map(lambda x: f"{x:+.2f}%")
+    disp["avg_win_return_str"] = disp["avg_win_return"].map(lambda x: "—" if pd.isna(x) else f"{x:+.2f}%")
+    disp["avg_loss_return_str"]= disp["avg_loss_return"].map(lambda x: "—" if pd.isna(x) else f"{x:+.2f}%")
+    disp["avg_days_str"]       = disp["avg_days"].map(lambda x: f"{x:.1f}")
 
-    display_cols = ["symbol_display", "sector", "n_trades", "avg_return_pct", "avg_days_held"]
-    show_df = best.loc[:, display_cols].copy()
-    show_df = _add_rownum(show_df)
-    # Pretty strings just for display
-    show_df["avg_return_pct"] = show_df["avg_return_pct"].map(lambda x: f"{x:+.2f}%")
-    show_df["avg_days_held"]  = show_df["avg_days_held"].map(lambda x: f"{x:.1f}")
-
+    display_cols = [
+        "symbol_display", "sector", "n_trades",
+        "avg_return_str", "avg_win_return_str", "avg_loss_return_str",
+        "avg_days_str"
+    ]
+    show_df = _add_rownum(disp.loc[:, display_cols])
     st.dataframe(
         show_df.rename(columns={
             "n_trades": "Closed trades",
-            "avg_return_pct": "Avg return",
-            "avg_days_held": "Avg days held"
+            "avg_return_str": "Avg return",
+            "avg_win_return_str": "Avg win return",
+            "avg_loss_return_str": "Avg loss return",
+            "avg_days_str": "Avg days held"
         }),
         use_container_width=True, hide_index=True
     )
 
+    # ---- Download (raw numeric values) ----
     st.download_button(
-        "📥 Download Top 15 (Avg Return)",
-        best.loc[:, ["symbol","sector","n_trades","avg_return","avg_days"]]
-            .rename(columns={"avg_return":"avg_return_pct","avg_days":"avg_days_held"})
-            .to_csv(index=False).encode("utf-8"),
-        "top15_avg_return.csv","text/csv"
+        "📥 Download Top 15 (Avg Return + Win/Loss)",
+        best.loc[:, [
+            "symbol", "sector", "n_trades",
+            "avg_return", "avg_win_return", "avg_loss_return",
+            "avg_days"
+        ]].rename(columns={
+            "avg_return": "avg_return_pct",
+            "avg_win_return": "avg_win_return_pct",
+            "avg_loss_return": "avg_loss_return_pct",
+            "avg_days": "avg_days_held"
+        }).to_csv(index=False).encode("utf-8"),
+        "top15_avg_return_with_win_loss.csv", "text/csv"
     )
 else:
     st.info("Not enough closed trades yet to compute historical leaders.")
+
 
 # ===========================
 # 💲 Open Trade Summaries by Capital
