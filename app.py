@@ -32,6 +32,10 @@ cap_emoji_map = caps.set_index("symbol")["cap_emoji"]
 trades["sector"]    = trades["symbol"].map(sector_map)
 trades["cap_score"] = trades["symbol"].map(cap_score_map)
 trades["cap_emoji"] = trades["symbol"].map(cap_emoji_map)
+# Drop cap_score 3 and 4 from all views
+_cap = pd.to_numeric(trades["cap_score"], errors="coerce")
+trades = trades[~_cap.isin([3, 4])].copy()
+
 
 # --- Latest close per symbol ---
 latest_prices = (
