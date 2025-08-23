@@ -57,6 +57,29 @@ trades["final_pct"] = trades.apply(
     lambda r: r["pct_return"] if pd.notna(r["exit_price"]) else r["unrealized_pct_return"],
     axis=1
 )
+# --- Per-ticker performance from CLOSED trades ---
+closed = trades[trades["exit_date"].notna()].copy()
+if not closed.empty:
+    closed["win"] = closed["pct_return"] > 0
+    perf = (
+        closed.groupby("symbol")
+              .agg(win_rate=("win", "mean"),
+                   avg_return=("pct_return", "mean"))
+              .reset_index()
+    )
+else:
+    perf = pd.DataFrame(columns=["symbol", "win_rate", "avg_return"])
+
+# quick lookup maps
+win_rate_map   = perf.set_index("symbol")["win_rate"].to_dict()     # 0..1
+avg_return_map = perf.set_index("symbol")["avg_return"].to_dict()   # %
+
+# tiny formatters
+def _fmt_pct(p, digits=0):
+    return "—" if pd.isna(p) else f"{p*100:.{digits}f}%"
+
+def _fmt_pct_abs(p, digits=2):
+    return "—" if pd.isna(p) else f"{p:.{digits}f}%"
 
 # --- Emoji symbol display ---
 trades["symbol_display"] = trades.apply(
@@ -149,36 +172,42 @@ else:
     )
 
 # ===========================
-# 🕒 Trades Entered in the Last 7 Days
-# ===========================
+# --- Trades Entered in the Last 7 Days
 st.subheader("🕒 Trades Entered in the Last 7 Days")
 if trades["entry_date"].notna().any():
-    entry_max = trades["entry_date"].dropna().max()
-    if pd.notna(entry_max):
-        cutoff = entry_max - timedelta(days=7)
-        recent = trades[trades["entry_date"] >= cutoff].copy()
-        recent = recent.sort_values(["entry_date","cap_score"], ascending=[False, True])
-    else:
-        recent = pd.DataFrame()
-else:
-    recent = pd.DataFrame()
+    cutoff = trades["entry_date"].max() - timedelta(days=7)
+    recent = trades[trades["entry_date"] >= cutoff].copy()
 
-if recent.empty:
-    st.info("No recent entries available yet.")
+    if not recent.empty:
+        # attach per-ticker historical performance
+        recent["ticker_win_rate"]   = recent["symbol"].map(win_rate_map)     # 0..1
+        recent["ticker_avg_return"] = recent["symbol"].map(avg_return_map)   # %
+        recent["win_rate_display"]  = recent["ticker_win_rate"].apply(lambda x: _fmt_pct(x, 0))
+        recent["avg_return_display"] = recent["ticker_avg_return"].apply(lambda x: _fmt_pct_abs(x, 2))
+
+        recent = recent.sort_values(["entry_date", "cap_score"], ascending=[False, True])
+
+        st.dataframe(
+            recent[[
+                "symbol_display", "sector", "entry_date", "entry",
+                "exit_price", "exit_date", "stop_loss",
+                "min_low", "max_high", "final_pct",
+                "win_rate_display", "avg_return_display"
+            ]].rename(columns={
+                "win_rate_display":  "Win rate (hist.)",
+                "avg_return_display": "Avg return (hist.)"
+            }),
+            use_container_width=True
+        )
+        st.download_button(
+            "📥 Download Recent Trades",
+            recent.to_csv(index=False).encode("utf-8"),
+            "recent_trades.csv", "text/csv"
+        )
+    else:
+        st.info("No recent entries available yet.")
 else:
-    st.dataframe(
-        recent[[
-            "symbol_display","sector","entry_date","entry",
-            "exit_price","exit_date","stop_loss",
-            "min_low","max_high","final_pct"
-        ]],
-        use_container_width=True
-    )
-    st.download_button(
-        "📥 Download Recent Trades",
-        recent.to_csv(index=False).encode("utf-8"),
-        "recent_trades.csv","text/csv"
-    )
+    st.info("No recent entries available yet.")
 
 # ===========================
 # 📤 Trades Exited in the Last 7 Days + Summary
