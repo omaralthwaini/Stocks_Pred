@@ -46,6 +46,48 @@ near_band_pp = st.sidebar.number_input(
     "Near-band (± percentage points)", min_value=0.1, max_value=10.0, step=0.1, value=1.0
 )
 
+# --- Strategy (2025+ guards) tuning ---
+st.sidebar.header("Strategy (2025+ guards)")
+
+use_enhanced = st.sidebar.checkbox(
+    "Enable enhanced exits for 2025+ entries", value=True, key="guard_enable"
+)
+
+cutoff_date_ui = st.sidebar.date_input(
+    "Enhanced cutoff date",
+    value=pd.Timestamp(2025, 1, 1).date(),
+    key="guard_cutoff",
+)
+
+guard_buffer_pp = st.sidebar.number_input(
+    "Guard buffer (percentage points)", min_value=0.0, max_value=5.0, step=0.25,
+    value=0.75, key="guard_buf"
+)
+
+guard_confirm_bars = st.sidebar.number_input(
+    "Confirmation bars (beyond threshold)", min_value=1, max_value=5, step=1,
+    value=2, key="guard_conf"
+)
+
+min_hold_bars = st.sidebar.number_input(
+    "Minimum hold bars before any guard can fire", min_value=0, max_value=10, step=1,
+    value=2, key="guard_minhold"
+)
+
+profit_mode = st.sidebar.radio(
+    "Profit guard mode", ["Avg-win re-cross", "Peak giveback"],
+    index=0, key="guard_mode"
+)
+
+# Only show the giveback % when "Peak giveback" is selected
+if profit_mode == "Peak giveback":
+    profit_trail_peak_dd = st.sidebar.number_input(
+        "Giveback from peak (%)", min_value=0.5, max_value=10.0, step=0.5,
+        value=3.0, key="guard_giveback"
+    )
+else:
+    profit_trail_peak_dd = None
+
 # =============== Load & Run Strategy ===============
 df, caps = load_data()
 
@@ -64,20 +106,30 @@ if not closed_seed.empty:
 else:
     avg_win_map, avg_loss_map = {}, {}
 
-# ---- 2) Enhanced run (applies 2025+ avg-win/avg-loss guards using the maps above)
-with st.spinner("⏳ Detecting trades (enhanced 2025+ guards)…"):
-    trades = run_strategy(
-        df, caps,
-        avg_win_map=avg_win_map,
-        avg_loss_map=avg_loss_map,
-        enhanced_cutoff="2025-01-01",   # only entries on/after this date use the new rules
-    )
+# ---- 2) Main run (optionally enhanced for 2025+ using the maps & sidebar knobs)
+if use_enhanced:
+    with st.spinner("⏳ Detecting trades (enhanced 2025+ guards)…"):
+        trades = run_strategy(
+            df, caps,
+            avg_win_map=avg_win_map,
+            avg_loss_map=avg_loss_map,
+            enhanced_cutoff=str(pd.Timestamp(cutoff_date_ui).date()),  # "YYYY-MM-DD"
+            guard_buffer_pp=float(guard_buffer_pp),
+            guard_confirm_bars=int(guard_confirm_bars),
+            min_hold_bars=int(min_hold_bars),
+            # Pass giveback % only when using Peak giveback mode; otherwise None = disabled
+            profit_trail_peak_dd=float(profit_trail_peak_dd) if profit_trail_peak_dd is not None else None,
+        )
+else:
+    with st.spinner("⏳ Detecting trades…"):
+        trades = run_strategy(df, caps)
 
 if trades.empty:
     st.warning("⚠️ No trades found.")
     st.stop()
 else:
     st.success(f"✅ {len(trades)} trades detected.")
+
 
 # ---- Sector / Cap maps
 sector_map     = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
