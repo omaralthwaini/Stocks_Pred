@@ -39,7 +39,7 @@ def date_only_cols(df_in, cols=("entry_date","exit_date","latest_date","date")):
 
 # =============== Sidebar ===============
 st.sidebar.header("View")
-page = st.sidebar.radio("Pick a page", ["Home", "Insights"], index=0)
+page = st.sidebar.radio("Pick a page", ["Home", "Insights", "Tester"], index=0)
 
 st.sidebar.header("Zone Sensitivity")
 near_band_pp = st.sidebar.number_input(
@@ -255,6 +255,191 @@ if page == "Home":
             parts = [f"{r.cap_emoji} — score {int(r.cap_score)}" for r in cap_legend_df.itertuples(index=False)]
             st.markdown("**Cap legend**")
             st.caption(" | ".join(parts))
+
+# =========================================
+#               TESTER
+# =========================================
+if page == "Tester":
+    st.subheader("🧪 Strategy Tester (one position at a time)")
+
+    # ---------- Sidebar inputs ----------
+    st.sidebar.header("Tester Settings")
+    # Default window = from the earliest trade entry to latest data date
+    min_entry = pd.to_datetime(trades["entry_date"]).min()
+    max_date  = pd.to_datetime(df["date"]).max()
+
+    start_date = st.sidebar.date_input(
+        "Start date",
+        value=min_entry.date() if pd.notna(min_entry) else pd.Timestamp.today().date(),
+        min_value=(min_entry.date() if pd.notna(min_entry) else pd.Timestamp.today().date())
+    )
+    end_date = st.sidebar.date_input(
+        "End date",
+        value=max_date.date() if pd.notna(max_date) else pd.Timestamp.today().date(),
+        min_value=start_date
+    )
+
+    starting_capital = st.sidebar.number_input("Starting capital ($)", min_value=1000.0, step=500.0, value=10000.0)
+    alloc_pct = st.sidebar.number_input("Allocation per trade (% of capital)", min_value=1.0, max_value=100.0, step=1.0, value=100.0)
+
+    # ---------- Candidate trades in window ----------
+    start_ts = pd.Timestamp(start_date)
+    end_ts   = pd.Timestamp(end_date)
+
+    # only trades whose ENTRY is inside the window
+    candidates = trades[(trades["entry_date"] >= start_ts) & (trades["entry_date"] <= end_ts)].copy()
+    candidates = candidates.sort_values("entry_date")
+    if candidates.empty:
+        st.info("No strategy entries within the selected window.")
+        st.stop()
+
+    # label each trade uniquely (symbol + entry date)
+    candidates["label"] = candidates.apply(
+        lambda r: f"{r['symbol']} — {pd.to_datetime(r['entry_date']).date()}",
+        axis=1
+    )
+
+    default_selection = candidates["label"].tolist()
+    chosen_labels = st.sidebar.multiselect(
+        "Choose entries to include (chronological, overlapping ones will be skipped automatically)",
+        default_selection
+    )
+
+    chosen = candidates[candidates["label"].isin(chosen_labels)].copy()
+
+    # ---------- Last close per symbol up to end date (for unrealized calc) ----------
+    last_close_upto = (
+        df[df["date"] <= end_ts].sort_values("date")
+          .groupby("symbol", as_index=False)
+          .agg(last_close_upto=("close", "last"))
+          .set_index("symbol")["last_close_upto"]
+          .to_dict()
+    )
+    # global fallback (latest overall)
+    latest_fallback = (
+        df.sort_values("date").groupby("symbol", as_index=False)
+          .agg(latest_close=("close","last"))
+          .set_index("symbol")["latest_close"]
+          .to_dict()
+    )
+
+    def _last_close_for(symbol):
+        v = last_close_upto.get(symbol)
+        if pd.isna(v) or v is None:
+            return latest_fallback.get(symbol)
+        return v
+
+    # ---------- Run the simulation (one position at a time) ----------
+    # Rule: we can only start a new trade if its entry_date >= available_from
+    capital = float(starting_capital)
+    available_from = start_ts
+
+    ledger = []  # records of taken trades
+
+    for _, r in chosen.iterrows():
+        entry_d = pd.to_datetime(r["entry_date"])
+        if entry_d < available_from:
+            # skip, still in a position
+            continue
+
+        sym   = r["symbol"]
+        entry = float(r["entry"])
+        # realized or unrealized?
+        ex_d  = pd.to_datetime(r["exit_date"]) if pd.notna(r["exit_date"]) else pd.NaT
+        realized = pd.notna(ex_d) and (ex_d <= end_ts)
+
+        if realized:
+            exit_px = float(r["exit_price"])
+            ret_pct = (exit_px / entry - 1.0) * 100.0
+            exit_d  = ex_d
+            status  = "Realized"
+            # position ends at the actual exit date
+            available_from = ex_d + pd.Timedelta(days=1)
+        else:
+            # still open by end of window (or no exit): use last close up to end date
+            lc = _last_close_for(sym)
+            if lc is None or pd.isna(lc):
+                # if we truly have no price, skip this trade
+                continue
+            exit_px = float(lc)
+            ret_pct = (exit_px / entry - 1.0) * 100.0
+            exit_d  = pd.NaT
+            status  = "Unrealized"
+            # block further trades: position is still active at end of window
+            available_from = end_ts + pd.Timedelta(days=1)
+
+        # Apply allocation
+        cap_before = capital
+        invest_amt = capital * (alloc_pct / 100.0)
+        cash_amt   = capital - invest_amt
+        invest_after = invest_amt * (1.0 + ret_pct/100.0)
+        capital = cash_amt + invest_after  # only one active position at a time anyway
+
+        # Compute days held
+        if pd.notna(exit_d):
+            days_held = (exit_d.normalize() - entry_d.normalize()).days
+        else:
+            # held until end of window
+            days_held = (end_ts.normalize() - entry_d.normalize()).days
+
+        ledger.append({
+            "symbol": sym,
+            "entry_date": entry_d,
+            "exit_date": exit_d,
+            "status": status,
+            "entry": entry,
+            "exit_or_last": exit_px,
+            "ret_pct": ret_pct,
+            "days_held": days_held,
+            "capital_before": cap_before,
+            "capital_after": capital,
+        })
+
+    if not ledger:
+        st.info("No trades were taken (either none selected, or all overlapped with an active position).")
+        st.stop()
+
+    # ---------- Results ----------
+    res = pd.DataFrame(ledger).sort_values("entry_date").reset_index(drop=True)
+
+    # Metrics
+    n_trades = len(res)
+    n_real   = (res["status"] == "Realized").sum()
+    win_rate = (res.loc[res["status"] == "Realized", "ret_pct"] > 0).mean() if n_real else float("nan")
+    avg_real = res.loc[res["status"] == "Realized", "ret_pct"].mean() if n_real else float("nan")
+    best_real= res.loc[res["status"] == "Realized", "ret_pct"].max() if n_real else float("nan")
+    worst_real=res.loc[res["status"] == "Realized", "ret_pct"].min() if n_real else float("nan")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Trades taken", f"{n_trades}")
+    c2.metric("Final capital", f"${capital:,.2f}")
+    total_ret = (capital/starting_capital - 1.0)*100.0
+    c3.metric("Total return", pct_str(total_ret))
+    c4.metric("Realized win rate", "—" if pd.isna(win_rate) else f"{win_rate:.0%}")
+    c5.metric("Avg realized return", "—" if pd.isna(avg_real) else pct_str(avg_real))
+
+    # Pretty table
+    out = res.copy()
+    out = date_only_cols(out, ["entry_date","exit_date"])
+    out["entry"]        = out["entry"].map(money_str)
+    out["exit_or_last"] = out["exit_or_last"].map(money_str)
+    out["ret_pct"]      = out["ret_pct"].map(lambda x: pct_str(x))
+    out["capital_before"]= out["capital_before"].map(money_str)
+    out["capital_after"] = out["capital_after"].map(money_str)
+
+    display_cols = [
+        "symbol","status","entry_date","exit_date","entry","exit_or_last",
+        "ret_pct","days_held","capital_before","capital_after"
+    ]
+    st.subheader("📜 Trade Ledger (simulated)")
+    st.dataframe(add_rownum(out.loc[:, display_cols]).rename(columns={
+        "exit_or_last": "Exit / Last",
+        "ret_pct": "Return",
+    }), use_container_width=True, hide_index=True)
+
+    st.caption("Rules: one position at a time; overlapping selected entries are skipped. "
+               "Unrealized P/L uses the last available close at or before the selected end date.")
+
 
 # =========================================
 #               INSIGHTS (Closed/analytics)
