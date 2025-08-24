@@ -26,12 +26,18 @@ def pct_str(x, digits=2, signed=True):
     return fmt.format(x)
 
 def date_only_cols(df_in, cols=("entry_date", "exit_date", "latest_date", "date")):
-    """Return a copy with selected datetime columns shown as date only (YYYY-MM-DD)."""
+    """
+    Return a copy with selected datetime-like columns coerced to string 'YYYY-MM-DD'
+    so Streamlit shows them without the '00:00:00' time.
+    """
     df = df_in.copy()
     for c in cols:
         if c in df.columns:
-            df[c] = pd.to_datetime(df[c]).dt.date
+            s = pd.to_datetime(df[c], errors="coerce")
+            # where keeps original (e.g., already strings / NaT) for non-parsable values
+            df[c] = s.dt.strftime("%Y-%m-%d").where(s.notna(), df[c])
     return df
+
 
 # =============== Sidebar ===============
 st.sidebar.header("View")
