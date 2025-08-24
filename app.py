@@ -256,246 +256,11 @@ if page == "Home":
             st.markdown("**Cap legend**")
             st.caption(" | ".join(parts))
 
-# =========================================
-#               TESTER
-# =========================================
-if page == "Tester":
-    st.subheader("🧪 Strategy Tester (one position at a time)")
-
-    # ---------- Sidebar inputs ----------
-    st.sidebar.header("Tester Settings")
-    # Default window = from earliest trade entry to latest data date
-    min_entry = pd.to_datetime(trades["entry_date"]).min()
-    max_date  = pd.to_datetime(df["date"]).max()
-
-    start_date = st.sidebar.date_input(
-        "Start date",
-        value=min_entry.date() if pd.notna(min_entry) else pd.Timestamp.today().date(),
-        min_value=(min_entry.date() if pd.notna(min_entry) else pd.Timestamp.today().date())
-    )
-    end_date = st.sidebar.date_input(
-        "End date",
-        value=max_date.date() if pd.notna(max_date) else pd.Timestamp.today().date(),
-        min_value=start_date
-    )
-
-    starting_capital = st.sidebar.number_input("Starting capital ($)", min_value=1000.0, step=500.0, value=10000.0)
-    alloc_pct = st.sidebar.number_input("Allocation per trade (% of capital)", min_value=1.0, max_value=100.0, step=1.0, value=100.0)
-
-    selection_mode = st.sidebar.radio(
-        "Trade selection mode",
-        ["By entries", "By tickers", "Top-N (avg return)"],
-        index=0
-    )
-
-    # ---------- Candidates in window ----------
-    start_ts = pd.Timestamp(start_date)
-    end_ts   = pd.Timestamp(end_date)
-
-    # Only trades whose ENTRY is inside the window
-    candidates = trades[(trades["entry_date"] >= start_ts) & (trades["entry_date"] <= end_ts)].copy()
-    candidates = candidates.sort_values("entry_date")
-    if candidates.empty:
-        st.info("No strategy entries within the selected window.")
-        st.stop()
-
-    # Unique label for entry rows
-    candidates["label"] = candidates.apply(
-        lambda r: f"{r['symbol']} — {pd.to_datetime(r['entry_date']).date()}",
-        axis=1
-    )
-
-    # ---------- Build chosen set according to mode ----------
-    chosen = pd.DataFrame(columns=candidates.columns)
-
-    if selection_mode == "By entries":
-        default_selection = candidates["label"].tolist()
-        chosen_labels = st.sidebar.multiselect(
-            "Choose entries (chronological; overlapping ones are skipped automatically)",
-            default_selection
-        )
-        chosen = candidates[candidates["label"].isin(chosen_labels)].copy()
-
-    elif selection_mode == "By tickers":
-        syms_avail = sorted(candidates["symbol"].unique().tolist())
-        chosen_syms = st.sidebar.multiselect(
-            "Choose tickers (all their entries inside window will be considered)",
-            syms_avail, default=syms_avail
-        )
-        chosen = candidates[candidates["symbol"].isin(chosen_syms)].copy()
-
-    else:  # Top-N (avg return)
-        if perf.empty:
-            st.warning("No historical performance available (no closed trades).")
-            st.stop()
-
-        N = st.sidebar.number_input("Top-N by avg return", min_value=1, max_value=50, step=1, value=5)
-        min_closed = st.sidebar.number_input("Min # closed trades", min_value=1, max_value=50, step=1, value=1)
-
-        # Rank tickers by historical avg return (closed trades), enforce min closed filter
-        perf_rank = (perf.dropna(subset=["avg_return"])
-                        .loc[perf["n_closed"] >= min_closed]
-                        .sort_values("avg_return", ascending=False))
-
-        if perf_rank.empty:
-            st.warning("No tickers meet the minimum closed-trade filter.")
-            st.stop()
-
-        # Intersect with tickers that actually have entries in the chosen window
-        syms_in_window = set(candidates["symbol"].unique().tolist())
-        ranked_syms = [s for s in perf_rank["symbol"].tolist() if s in syms_in_window][:int(N)]
-
-        if not ranked_syms:
-            st.warning("Top-N ranked tickers have no entries in the selected window.")
-            st.stop()
-
-        # Show who we picked
-        st.caption("Selected top performers (by historical avg return):")
-        preview = perf_rank.loc[perf_rank["symbol"].isin(ranked_syms),
-                                ["symbol","avg_return","win_rate","n_closed"]].copy()
-        preview["avg_return"] = preview["avg_return"].map(lambda x: pct_str(x))
-        preview["win_rate"]   = preview["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
-        st.dataframe(add_rownum(preview).rename(columns={
-            "symbol":"Ticker","avg_return":"Avg return","win_rate":"Win rate","#":"#","n_closed":"Closed"
-        }), use_container_width=True, hide_index=True)
-
-        chosen = candidates[candidates["symbol"].isin(ranked_syms)].copy()
-
-    # ---------- Last close per symbol up to end date (for unrealized calc) ----------
-    last_close_upto = (
-        df[df["date"] <= end_ts].sort_values("date")
-          .groupby("symbol", as_index=False)
-          .agg(last_close_upto=("close", "last"))
-          .set_index("symbol")["last_close_upto"]
-          .to_dict()
-    )
-    latest_fallback = (
-        df.sort_values("date").groupby("symbol", as_index=False)
-          .agg(latest_close=("close","last"))
-          .set_index("symbol")["latest_close"]
-          .to_dict()
-    )
-
-    def _last_close_for(symbol):
-        v = last_close_upto.get(symbol)
-        if pd.isna(v) or v is None:
-            return latest_fallback.get(symbol)
-        return v
-
-    # ---------- Run the simulation (one position at a time) ----------
-    # Rule: we can only start a new trade if its entry_date >= available_from
-    capital = float(starting_capital)
-    available_from = start_ts
-
-    ledger = []  # records of taken trades
-
-    for _, r in chosen.sort_values("entry_date").iterrows():
-        entry_d = pd.to_datetime(r["entry_date"])
-        if entry_d < available_from:
-            # skip, still in a position
-            continue
-
-        sym   = r["symbol"]
-        entry = float(r["entry"])
-        ex_d  = pd.to_datetime(r["exit_date"]) if pd.notna(r["exit_date"]) else pd.NaT
-        realized = pd.notna(ex_d) and (ex_d <= end_ts)
-
-        if realized:
-            exit_px = float(r["exit_price"])
-            ret_pct = (exit_px / entry - 1.0) * 100.0
-            exit_d  = ex_d
-            status  = "Realized"
-            available_from = ex_d + pd.Timedelta(days=1)  # can take next entry after exit day
-        else:
-            lc = _last_close_for(sym)
-            if lc is None or pd.isna(lc):
-                # if we truly have no price, skip this trade
-                continue
-            exit_px = float(lc)
-            ret_pct = (exit_px / entry - 1.0) * 100.0
-            exit_d  = pd.NaT
-            status  = "Unrealized"
-            # still holding at end of window; blocks further entries
-            available_from = end_ts + pd.Timedelta(days=1)
-
-        # Apply allocation (one position at a time -> effectively all-in if alloc=100%)
-        cap_before = capital
-        invest_amt = capital * (alloc_pct / 100.0)
-        cash_amt   = capital - invest_amt
-        invest_after = invest_amt * (1.0 + ret_pct/100.0)
-        capital = cash_amt + invest_after
-
-        # Days held
-        if pd.notna(exit_d):
-            days_held = (exit_d.normalize() - entry_d.normalize()).days
-        else:
-            days_held = (end_ts.normalize() - entry_d.normalize()).days
-
-        ledger.append({
-            "symbol": sym,
-            "entry_date": entry_d,
-            "exit_date": exit_d,
-            "status": status,
-            "entry": entry,
-            "exit_or_last": exit_px,
-            "ret_pct": ret_pct,
-            "days_held": days_held,
-            "capital_before": cap_before,
-            "capital_after": capital,
-        })
-
-    if not ledger:
-        st.info("No trades were taken (selection overlapped or empty).")
-        st.stop()
-
-    # ---------- Results ----------
-    res = pd.DataFrame(ledger).sort_values("entry_date").reset_index(drop=True)
-
-    # Metrics
-    n_trades = len(res)
-    n_real   = (res["status"] == "Realized").sum()
-    total_ret = (capital/starting_capital - 1.0)*100.0
-    win_rate = (res.loc[res["status"] == "Realized", "ret_pct"] > 0).mean() if n_real else float("nan")
-    avg_real = res.loc[res["status"] == "Realized", "ret_pct"].mean() if n_real else float("nan")
-    best_real= res.loc[res["status"] == "Realized", "ret_pct"].max() if n_real else float("nan")
-    worst_real=res.loc[res["status"] == "Realized", "ret_pct"].min() if n_real else float("nan")
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Trades taken", f"{n_trades}")
-    c2.metric("Final capital", f"${capital:,.2f}")
-    c3.metric("Total return", pct_str(total_ret))
-    c4.metric("Realized win rate", "—" if pd.isna(win_rate) else f"{win_rate:.0%}")
-    c5.metric("Avg realized return", "—" if pd.isna(avg_real) else pct_str(avg_real))
-
-    # Pretty table
-    out = res.copy()
-    out = date_only_cols(out, ["entry_date","exit_date"])
-    out["entry"]        = out["entry"].map(money_str)
-    out["exit_or_last"] = out["exit_or_last"].map(money_str)
-    out["ret_pct"]      = out["ret_pct"].map(lambda x: pct_str(x))
-    out["capital_before"]= out["capital_before"].map(money_str)
-    out["capital_after"] = out["capital_after"].map(money_str)
-
-    display_cols = [
-        "symbol","status","entry_date","exit_date","entry","exit_or_last",
-        "ret_pct","days_held","capital_before","capital_after"
-    ]
-    st.subheader("📜 Trade Ledger (simulated)")
-    st.dataframe(add_rownum(out.loc[:, display_cols]).rename(columns={
-        "exit_or_last": "Exit / Last",
-        "ret_pct": "Return",
-    }), use_container_width=True, hide_index=True)
-
-    st.caption("Rules: one position at a time; overlapping selected entries are skipped. "
-               "Unrealized P/L uses the last available close at or before the selected end date. "
-               "Top-N uses historical avg return from closed trades and only tickers with entries in the chosen window.")
-
-
 
 # =========================================
 #               INSIGHTS (Closed/analytics)
 # =========================================
-else:
+if page == "Insights":
     # ---- Full trades export
     st.subheader("📦 Download All Trades")
     all_trades_to_export = trades.sort_values("entry_date", ascending=False)[[
@@ -617,3 +382,224 @@ else:
         )
     else:
         st.info("Not enough closed trades yet to compute historical leaders.")
+# =========================================
+#               TESTER
+# =========================================
+if page == "Tester":
+    st.subheader("🧪 Strategy Tester (one position at a time)")
+
+    # ---------- Sidebar inputs ----------
+    st.sidebar.header("Tester Settings")
+    min_entry = pd.to_datetime(trades["entry_date"]).min()
+    max_date  = pd.to_datetime(df["date"]).max()
+
+    start_date = st.sidebar.date_input(
+        "Start date",
+        value=min_entry.date() if pd.notna(min_entry) else pd.Timestamp.today().date(),
+        min_value=(min_entry.date() if pd.notna(min_entry) else pd.Timestamp.today().date()),
+        key="tester_start_date"
+    )
+    end_date = st.sidebar.date_input(
+        "End date",
+        value=max_date.date() if pd.notna(max_date) else pd.Timestamp.today().date(),
+        min_value=start_date,
+        key="tester_end_date"
+    )
+
+    starting_capital = st.sidebar.number_input(
+        "Starting capital ($)", min_value=1000.0, step=500.0, value=10000.0, key="tester_capital"
+    )
+    alloc_pct = st.sidebar.number_input(
+        "Allocation per trade (% of capital)", min_value=1.0, max_value=100.0, step=1.0, value=100.0, key="tester_alloc"
+    )
+
+    st.sidebar.subheader("Selection mode")
+    selection_mode = st.sidebar.radio(
+        "Trade selection mode",
+        ["By entries", "By tickers", "Top-N (avg return)"],
+        index=0,
+        key="tester_mode"
+    )
+
+    # ---------- Candidates in window ----------
+    start_ts = pd.Timestamp(start_date)
+    end_ts   = pd.Timestamp(end_date)
+
+    candidates = trades[(trades["entry_date"] >= start_ts) & (trades["entry_date"] <= end_ts)].copy()
+    candidates = candidates.sort_values("entry_date")
+    if candidates.empty:
+        st.info("No strategy entries within the selected window.")
+        st.stop()
+
+    candidates["label"] = candidates.apply(
+        lambda r: f"{r['symbol']} — {pd.to_datetime(r['entry_date']).date()}",
+        axis=1
+    )
+
+    # ---------- Build chosen set according to mode ----------
+    chosen = pd.DataFrame(columns=candidates.columns)
+
+    if selection_mode == "By entries":
+        default_selection = candidates["label"].tolist()
+        chosen_labels = st.sidebar.multiselect(
+            "Choose entries (chronological; overlapping ones are skipped automatically)",
+            default_selection,
+            default=default_selection,
+            key="tester_entries"
+        )
+        chosen = candidates[candidates["label"].isin(chosen_labels)].copy()
+
+    elif selection_mode == "By tickers":
+        syms_avail = sorted(candidates["symbol"].unique().tolist())
+        chosen_syms = st.sidebar.multiselect(
+            "Choose tickers (all their entries inside window will be considered)",
+            syms_avail, default=syms_avail, key="tester_tickers"
+        )
+        chosen = candidates[candidates["symbol"].isin(chosen_syms)].copy()
+
+    else:  # Top-N (avg return)
+        if perf.empty:
+            st.warning("No historical performance available (no closed trades).")
+            st.stop()
+
+        N = st.sidebar.number_input("Top-N by avg return", min_value=1, max_value=50, step=1, value=5, key="tester_topn")
+        min_closed = st.sidebar.number_input("Min # closed trades", min_value=1, max_value=50, step=1, value=1, key="tester_minclosed")
+
+        perf_rank = (perf.dropna(subset=["avg_return"])
+                        .loc[perf["n_closed"] >= min_closed]
+                        .sort_values("avg_return", ascending=False))
+
+        if perf_rank.empty:
+            st.warning("No tickers meet the minimum closed-trade filter.")
+            st.stop()
+
+        syms_in_window = set(candidates["symbol"].unique().tolist())
+        ranked_syms = [s for s in perf_rank["symbol"].tolist() if s in syms_in_window][:int(N)]
+
+        if not ranked_syms:
+            st.warning("Top-N ranked tickers have no entries in the selected window.")
+            st.stop()
+
+        st.caption("Selected top performers (by historical avg return):")
+        preview = perf_rank.loc[perf_rank["symbol"].isin(ranked_syms),
+                                ["symbol","avg_return","win_rate","n_closed"]].copy()
+        preview["avg_return"] = preview["avg_return"].map(lambda x: pct_str(x))
+        preview["win_rate"]   = preview["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
+        st.dataframe(add_rownum(preview).rename(columns={
+            "symbol":"Ticker","avg_return":"Avg return","win_rate":"Win rate","#":"#","n_closed":"Closed"
+        }), use_container_width=True, hide_index=True)
+
+        chosen = candidates[candidates["symbol"].isin(ranked_syms)].copy()
+
+    # ---------- Last close per symbol up to end date ----------
+    last_close_upto = (
+        df[df["date"] <= end_ts].sort_values("date")
+          .groupby("symbol", as_index=False)
+          .agg(last_close_upto=("close", "last"))
+          .set_index("symbol")["last_close_upto"]
+          .to_dict()
+    )
+    latest_fallback = (
+        df.sort_values("date").groupby("symbol", as_index=False)
+          .agg(latest_close=("close","last"))
+          .set_index("symbol")["latest_close"]
+          .to_dict()
+    )
+    def _last_close_for(symbol):
+        v = last_close_upto.get(symbol)
+        if pd.isna(v) or v is None:
+            return latest_fallback.get(symbol)
+        return v
+
+    # ---------- Run simulation ----------
+    capital = float(starting_capital)
+    available_from = start_ts
+    ledger = []
+
+    for _, r in chosen.sort_values("entry_date").iterrows():
+        entry_d = pd.to_datetime(r["entry_date"])
+        if entry_d < available_from:
+            continue
+
+        sym   = r["symbol"]
+        entry = float(r["entry"])
+        ex_d  = pd.to_datetime(r["exit_date"]) if pd.notna(r["exit_date"]) else pd.NaT
+        realized = pd.notna(ex_d) and (ex_d <= end_ts)
+
+        if realized:
+            exit_px = float(r["exit_price"])
+            ret_pct = (exit_px / entry - 1.0) * 100.0
+            exit_d  = ex_d
+            status  = "Realized"
+            available_from = ex_d + pd.Timedelta(days=1)
+        else:
+            lc = _last_close_for(sym)
+            if lc is None or pd.isna(lc):
+                continue
+            exit_px = float(lc)
+            ret_pct = (exit_px / entry - 1.0) * 100.0
+            exit_d  = pd.NaT
+            status  = "Unrealized"
+            available_from = end_ts + pd.Timedelta(days=1)
+
+        cap_before  = capital
+        invest_amt  = capital * (alloc_pct / 100.0)
+        cash_amt    = capital - invest_amt
+        invest_after= invest_amt * (1.0 + ret_pct/100.0)
+        capital     = cash_amt + invest_after
+
+        days_held = (exit_d.normalize() - entry_d.normalize()).days if pd.notna(exit_d) \
+                    else (end_ts.normalize() - entry_d.normalize()).days
+
+        ledger.append({
+            "symbol": sym,
+            "entry_date": entry_d,
+            "exit_date": exit_d,
+            "status": status,
+            "entry": entry,
+            "exit_or_last": exit_px,
+            "ret_pct": ret_pct,
+            "days_held": days_held,
+            "capital_before": cap_before,
+            "capital_after": capital,
+        })
+
+    if not ledger:
+        st.info("No trades were taken (either none selected, or all overlapped with an active position).")
+        st.stop()
+
+    res = pd.DataFrame(ledger).sort_values("entry_date").reset_index(drop=True)
+
+    # KPIs
+    n_trades = len(res)
+    n_real   = (res["status"] == "Realized").sum()
+    total_ret = (capital/starting_capital - 1.0)*100.0
+    win_rate = (res.loc[res["status"] == "Realized", "ret_pct"] > 0).mean() if n_real else float("nan")
+    avg_real = res.loc[res["status"] == "Realized", "ret_pct"].mean() if n_real else float("nan")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Trades taken", f"{n_trades}")
+    c2.metric("Final capital", f"${capital:,.2f}")
+    c3.metric("Total return", pct_str(total_ret))
+    c4.metric("Realized win rate", "—" if pd.isna(win_rate) else f"{win_rate:.0%}")
+    c5.metric("Avg realized return", "—" if pd.isna(avg_real) else pct_str(avg_real))
+
+    out = res.copy()
+    out = date_only_cols(out, ["entry_date","exit_date"])
+    out["entry"]         = out["entry"].map(money_str)
+    out["exit_or_last"]  = out["exit_or_last"].map(money_str)
+    out["ret_pct"]       = out["ret_pct"].map(lambda x: pct_str(x))
+    out["capital_before"]= out["capital_before"].map(money_str)
+    out["capital_after"] = out["capital_after"].map(money_str)
+
+    display_cols = ["symbol","status","entry_date","exit_date","entry","exit_or_last",
+                    "ret_pct","days_held","capital_before","capital_after"]
+    st.subheader("📜 Trade Ledger (simulated)")
+    st.dataframe(add_rownum(out.loc[:, display_cols]).rename(columns={
+        "exit_or_last": "Exit / Last",
+        "ret_pct": "Return",
+    }), use_container_width=True, hide_index=True)
+
+    st.caption("Rules: one position at a time; overlapping selected entries are skipped. "
+               "Unrealized P/L uses the last available close at or before the selected end date. "
+               "Top-N uses historical avg return from closed trades and only tickers with entries in the chosen window.")
