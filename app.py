@@ -25,6 +25,14 @@ def pct_str(x, digits=2, signed=True):
     fmt = f"{{:{'+' if signed else ''}.{digits}f}}%"
     return fmt.format(x)
 
+def date_only_cols(df_in, cols=("entry_date", "exit_date", "latest_date", "date")):
+    """Return a copy with selected datetime columns shown as date only (YYYY-MM-DD)."""
+    df = df_in.copy()
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c]).dt.date
+    return df
+
 # =============== Sidebar ===============
 st.sidebar.header("View")
 page = st.sidebar.radio("Pick a page", ["Home", "Insights"], index=0)
@@ -176,17 +184,17 @@ if page == "Home":
         latest["n_closed"]        = latest["symbol"].map(n_closed_map).fillna(0).astype(int)
 
         latest = latest.sort_values(
-        by=["entry_date", "avg_win_return"],
-        ascending=[False, False],
-        na_position="last"
+            by=["entry_date", "avg_win_return"],
+            ascending=[False, False],
+            na_position="last"
         )
-
 
         display_cols = [
             "symbol_display","sector","entry_date","entry","latest_close","unrealized_pct_return",
             "win_rate","avg_return","avg_win_return","avg_loss_return","n_closed"
         ]
         show = latest.loc[:, display_cols].copy()
+        show = date_only_cols(show, ["entry_date"])      # <-- date-only
         # pretty strings
         show["win_rate"]        = show["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
         for c in ["avg_return","avg_win_return","avg_loss_return","unrealized_pct_return"]:
@@ -234,6 +242,7 @@ if page == "Home":
                 "unrealized_pct_return","avg_win_return","n_closed","win_rate"
             ]
             table = positive.loc[:, cols].copy()
+            table = date_only_cols(table, ["entry_date"])   # <-- date-only
             table["unrealized_pct_return"] = table["unrealized_pct_return"].map(lambda x: pct_str(x))
             table["avg_win_return"]        = table["avg_win_return"].map(lambda x: pct_str(x))
             table["win_rate"]              = table["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
@@ -250,6 +259,7 @@ if page == "Home":
                 "unrealized_pct_return","avg_loss_return","n_closed","win_rate"
             ]
             table = negative.loc[:, cols].copy()
+            table = date_only_cols(table, ["entry_date"])   # <-- date-only
             table["unrealized_pct_return"] = table["unrealized_pct_return"].map(lambda x: pct_str(x))
             table["avg_loss_return"]       = table["avg_loss_return"].map(lambda x: pct_str(x))
             table["win_rate"]              = table["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
@@ -332,9 +342,11 @@ else:
         "symbol_display","cap_score","sector","entry_date","entry","outcome",
         "exit_price","exit_date","stop_loss","min_low","max_high","final_pct"
     ]]
+    # date-only in the CSV:
+    csv_df = date_only_cols(all_trades_to_export, ["entry_date", "exit_date"])
     st.download_button(
         "📥 Download Full Trade History",
-        all_trades_to_export.to_csv(index=False).encode("utf-8"),
+        csv_df.to_csv(index=False).encode("utf-8"),
         "all_trades.csv","text/csv"
     )
 
@@ -345,7 +357,8 @@ else:
         if not subset.empty:
             st.download_button(
                 f"📥 Download {sector} ({len(subset)})",
-                subset.sort_values("entry_date", ascending=False).to_csv(index=False).encode("utf-8"),
+                date_only_cols(subset.sort_values("entry_date", ascending=False),
+                               ["entry_date","exit_date"]).to_csv(index=False).encode("utf-8"),
                 f"{sector}_trades.csv","text/csv"
             )
 
@@ -372,7 +385,9 @@ else:
     else:
         recent_exits["result"] = recent_exits.apply(_format_exit, axis=1)
         cols = ["symbol_display","sector","entry_date","exit_date","entry","exit_price","exit_reason","result"]
-        show_df = add_rownum(recent_exits.loc[:, cols].sort_values("exit_date", ascending=False))
+        show_df = recent_exits.loc[:, cols].sort_values("exit_date", ascending=False)
+        show_df = date_only_cols(show_df, ["entry_date","exit_date"])  # <-- date-only
+        show_df = add_rownum(show_df)
         st.dataframe(show_df, use_container_width=True, hide_index=True)
 
         st.subheader("📊 Exit Summary (Last 7 Days)")
