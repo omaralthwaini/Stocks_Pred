@@ -49,8 +49,29 @@ near_band_pp = st.sidebar.number_input(
 # =============== Load & Run Strategy ===============
 df, caps = load_data()
 
-with st.spinner("⏳ Detecting trades..."):
-    trades = run_strategy(df, caps)
+# ---- 1) Seed run (no guards) -> build avg win/loss maps from *all* closed trades
+with st.spinner("⏳ Detecting trades (seed)…"):
+    trades_seed = run_strategy(df, caps)
+
+# Build maps from seed closed trades
+closed_seed = trades_seed[trades_seed["exit_date"].notna()].copy()
+if not closed_seed.empty:
+    closed_seed["pct_return"] = (closed_seed["exit_price"] / closed_seed["entry"] - 1) * 100
+    avg_win_map  = (closed_seed.loc[closed_seed["pct_return"] > 0]
+                               .groupby("symbol")["pct_return"].mean().to_dict())
+    avg_loss_map = (closed_seed.loc[closed_seed["pct_return"] < 0]
+                               .groupby("symbol")["pct_return"].mean().to_dict())
+else:
+    avg_win_map, avg_loss_map = {}, {}
+
+# ---- 2) Enhanced run (applies 2025+ avg-win/avg-loss guards using the maps above)
+with st.spinner("⏳ Detecting trades (enhanced 2025+ guards)…"):
+    trades = run_strategy(
+        df, caps,
+        avg_win_map=avg_win_map,
+        avg_loss_map=avg_loss_map,
+        enhanced_cutoff="2025-01-01",   # only entries on/after this date use the new rules
+    )
 
 if trades.empty:
     st.warning("⚠️ No trades found.")
