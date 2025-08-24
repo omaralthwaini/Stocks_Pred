@@ -29,10 +29,7 @@ def money_str(x):
     return "—" if pd.isna(x) else f"${x:,.2f}"
 
 def date_only_cols(df_in, cols=("entry_date","exit_date","latest_date","date")):
-    """
-    Return a copy with selected datetime-like columns coerced to string 'YYYY-MM-DD'
-    so Streamlit shows them without the '00:00:00' time.
-    """
+    """Coerce selected datetime-like columns to YYYY-MM-DD strings for display."""
     df = df_in.copy()
     for c in cols:
         if c in df.columns:
@@ -44,12 +41,9 @@ def date_only_cols(df_in, cols=("entry_date","exit_date","latest_date","date")):
 st.sidebar.header("View")
 page = st.sidebar.radio("Pick a page", ["Home", "Insights"], index=0)
 
-st.sidebar.header("Watchlist Settings")
+st.sidebar.header("Zone Sensitivity")
 near_band_pp = st.sidebar.number_input(
     "Near-band (± percentage points)", min_value=0.1, max_value=10.0, step=0.1, value=1.0
-)
-watchlist_limit = st.sidebar.number_input(
-    "Max rows per watchlist", min_value=5, max_value=50, step=1, value=15
 )
 
 # =============== Load & Run Strategy ===============
@@ -141,8 +135,7 @@ if not closed.empty:
     loss_mean = (closed.loc[closed["pct_return"] < 0]
                         .groupby("symbol")["pct_return"]
                         .mean().rename("avg_loss_return"))
-    perf = (base.merge(win_mean, on="symbol", how="left")
-                 .merge(loss_mean, on="symbol", how="left"))
+    perf = base.merge(win_mean, on="symbol", how="left").merge(loss_mean, on="symbol", how="left")
 else:
     perf = pd.DataFrame(columns=[
         "symbol","win_rate","avg_return","n_closed","avg_days",
@@ -158,249 +151,102 @@ n_closed_map      = perf.set_index("symbol")["n_closed"].to_dict()
 avg_days_map      = perf.set_index("symbol")["avg_days"].to_dict()
 
 # =========================================
-#                 HOME
+#                 HOME (Open trades)
 # =========================================
 if page == "Home":
-    # ---------- KPI Summary (last 7 days exits) ----------
+    st.subheader("🔓 Open Trades")
+
     open_trades = trades[trades["outcome"] == 0].copy()
-    entries_cutoff = trades["entry_date"].max() - timedelta(days=7) if trades["entry_date"].notna().any() else None
-    recent_entries = trades[(trades["entry_date"].notna()) & (trades["entry_date"] >= entries_cutoff)] if entries_cutoff else pd.DataFrame()
-    exits_cutoff = trades["exit_date"].dropna().max() - timedelta(days=7) if trades["exit_date"].notna().any() else None
-    recent_exits = trades[(trades["exit_date"].notna()) & (trades["exit_date"] >= exits_cutoff)] if exits_cutoff else pd.DataFrame()
-
-    kpi_cols = st.columns(5)
-    kpi_cols[0].metric("Open trades", len(open_trades))
-    kpi_cols[1].metric("Entries (7d)", len(recent_entries))
-    kpi_cols[2].metric("Exits (7d)", len(recent_exits))
-    if not recent_exits.empty:
-        kpi_cols[3].metric("Win rate (7d)", f"{(recent_exits['pct_return'] > 0).mean():.0%}")
-        kpi_cols[4].metric("Avg exit return (7d)", pct_str(recent_exits["pct_return"].mean()))
+    if open_trades.empty:
+        st.info("No open trades.")
     else:
-        kpi_cols[3].metric("Win rate (7d)", "—")
-        kpi_cols[4].metric("Avg exit return (7d)", "—")
+        # attach historical %s for price targets
+        open_trades["avg_return"]      = open_trades["symbol"].map(avg_return_map)
+        open_trades["avg_win_return"]  = open_trades["symbol"].map(avg_win_ret_map)
+        open_trades["avg_loss_return"] = open_trades["symbol"].map(avg_loss_ret_map)
 
-    # ---------- Latest Entries ----------
-    st.subheader("🆕 Latest Entries")
-
-    if recent_entries.empty:
-        st.info("No recent entries in the last 7 days.")
-    else:
-        latest = recent_entries.copy()
-
-        # attach hist stats
-        latest["win_rate"]        = latest["symbol"].map(win_rate_map)         # 0..1
-        latest["avg_return"]      = latest["symbol"].map(avg_return_map)       # %
-        latest["avg_win_return"]  = latest["symbol"].map(avg_win_ret_map)      # %
-        latest["avg_loss_return"] = latest["symbol"].map(avg_loss_ret_map)     # %
-        latest["n_closed"]        = latest["symbol"].map(n_closed_map).fillna(0).astype(int)
-
-        # price levels implied by historical %s
-        latest["guard_loss_price"] = latest.apply(
+        # implied price levels
+        open_trades["guard_loss_price"]   = open_trades.apply(
             lambda r: r["entry"] * (1 + r["avg_loss_return"]/100.0)
-            if pd.notna(r["avg_loss_return"]) else pd.NA,
-            axis=1
+            if pd.notna(r["avg_loss_return"]) else pd.NA, axis=1
         )
-        latest["first_target_price"] = latest.apply(
+        open_trades["first_target_price"] = open_trades.apply(
             lambda r: r["entry"] * (1 + r["avg_return"]/100.0)
-            if pd.notna(r["avg_return"]) else pd.NA,
-            axis=1
+            if pd.notna(r["avg_return"]) else pd.NA, axis=1
         )
-        latest["win_target_price"] = latest.apply(
+        open_trades["win_target_price"]   = open_trades.apply(
             lambda r: r["entry"] * (1 + r["avg_win_return"]/100.0)
-            if pd.notna(r["avg_win_return"]) else pd.NA,
-            axis=1
+            if pd.notna(r["avg_win_return"]) else pd.NA, axis=1
         )
 
-        # zone label based on proximity to hist %s (uses sidebar near_band_pp)
-        def _zone_label(r):
+        # zone color (emoji only)
+        def zone_emoji(r):
             u  = r["unrealized_pct_return"]
             aw = r["avg_win_return"]
             ar = r["avg_return"]
             al = r["avg_loss_return"]
             if pd.notna(u) and pd.notna(al) and abs(u - al) <= near_band_pp:
-                return "🟥 near avg loss"
+                return "🟥"
             if pd.notna(u) and pd.notna(ar) and abs(u - ar) <= near_band_pp:
-                return "🟧 near avg return"
+                return "🟧"
             if pd.notna(u) and pd.notna(aw) and abs(u - aw) <= near_band_pp:
-                return "🟩 near avg win"
-            return "—"
+                return "🟩"
+            return "◻️"
+        open_trades["zone"] = open_trades.apply(zone_emoji, axis=1)
 
-        latest["zone"] = latest.apply(_zone_label, axis=1)
+        # sort newest entries first, then by cap_score (lower first)
+        open_trades = open_trades.sort_values(["entry_date", "cap_score"], ascending=[False, True])
 
-        # sort: newest first, then higher avg win return
-        latest["sort_win"] = latest["avg_win_return"].fillna(-1e9)
-        latest = latest.sort_values(by=["entry_date", "sort_win"], ascending=[False, False]).drop(columns="sort_win")
-
-        # pretty columns for display
-        show = latest.loc[:, [
-            "symbol_display","sector","entry_date","entry","latest_close","unrealized_pct_return",
-            "guard_loss_price","avg_loss_return",
-            "first_target_price","avg_return",
-            "win_target_price","avg_win_return",
-            "zone","n_closed","win_rate"
+        # assemble display
+        show = open_trades.loc[:, [
+            "zone",
+            "symbol_display","sector","entry_date",
+            "entry","guard_loss_price","first_target_price","win_target_price",
+            "latest_close"
         ]].copy()
 
-        # format
-        show = date_only_cols(show, ["entry_date"])  # date-only
-        show["entry"]                 = show["entry"].map(money_str)
-        show["latest_close"]          = show["latest_close"].map(money_str)
-        show["unrealized_pct_return"] = show["unrealized_pct_return"].map(lambda x: pct_str(x))
-        show["guard_loss_price"]      = show["guard_loss_price"].map(money_str)
-        show["first_target_price"]    = show["first_target_price"].map(money_str)
-        show["win_target_price"]      = show["win_target_price"].map(money_str)
-        show["avg_loss_return"]       = show["avg_loss_return"].map(lambda x: pct_str(x))
-        show["avg_return"]            = show["avg_return"].map(lambda x: pct_str(x))
-        show["avg_win_return"]        = show["avg_win_return"].map(lambda x: pct_str(x))
-        show["win_rate"]              = show["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
+        # formatting
+        show = date_only_cols(show, ["entry_date"])
+        for c in ["entry","guard_loss_price","first_target_price","win_target_price","latest_close"]:
+            show[c] = show[c].map(money_str)
 
-        # friendly column names
+        # rename headers to requested labels
         show = show.rename(columns={
+            "symbol_display": "Symbol",
+            "sector": "Sector",
             "entry_date": "Entry date",
-            "unrealized_pct_return": "Unrealized",
-            "guard_loss_price": "Guard (avg loss)",
-            "avg_loss_return": "Avg loss %",
-            "first_target_price": "1st target (avg return)",
-            "avg_return": "Avg return %",
-            "win_target_price": "Win target (avg win)",
-            "avg_win_return": "Avg win %",
-            "n_closed": "# closed",
-            "win_rate": "Win rate"
+            "entry": "Entry",
+            "guard_loss_price": "Guard",
+            "first_target_price": "1st target",
+            "win_target_price": "2nd target",
+            "latest_close": "Latest close",
+            "zone": " "  # visually minimal header for the colored dot/square
         })
 
-        # row numbers
-        show = add_rownum(show)
         st.dataframe(show, use_container_width=True, hide_index=True)
 
-    # ---------- Positive / Negative Watchlists ----------
-    # Attach hist stats to open trades
-    open_perf = open_trades.copy()
-    open_perf["avg_win_return"]  = open_perf["symbol"].map(avg_win_ret_map)
-    open_perf["avg_loss_return"] = open_perf["symbol"].map(avg_loss_ret_map)
-    open_perf["n_closed"]        = open_perf["symbol"].map(n_closed_map).fillna(0).astype(int)
-    open_perf["win_rate"]        = open_perf["symbol"].map(win_rate_map)
+        # --- Legends (compact, below the table) ---
+        st.markdown("**Zone legend**")
+        st.caption(
+            f"🟥 near avg **loss** (±{near_band_pp:.1f}pp)  •  "
+            f"🟧 near avg **return** (±{near_band_pp:.1f}pp)  •  "
+            f"🟩 near avg **win** (±{near_band_pp:.1f}pp)  •  "
+            f"◻️ not near any"
+        )
 
-    # Positive: unrealized >= 0 and near avg_win_return
-    pos_mask = (
-        open_perf["unrealized_pct_return"].notna()
-        & open_perf["avg_win_return"].notna()
-        & (open_perf["unrealized_pct_return"] >= 0)
-        & (open_perf["unrealized_pct_return"] - open_perf["avg_win_return"]).abs() <= near_band_pp
-    )
-    positive = open_perf[pos_mask].copy().sort_values("unrealized_pct_return", ascending=False).head(int(watchlist_limit))
-
-    # Negative: unrealized <= 0 and near avg_loss_return (usually negative)
-    neg_mask = (
-        open_perf["unrealized_pct_return"].notna()
-        & open_perf["avg_loss_return"].notna()
-        & (open_perf["unrealized_pct_return"] <= 0)
-        & (open_perf["unrealized_pct_return"] - open_perf["avg_loss_return"]).abs() <= near_band_pp
-    )
-    negative = open_perf[neg_mask].copy().sort_values("unrealized_pct_return").head(int(watchlist_limit))
-
-    c1, c2 = st.columns(2, gap="large")
-
-    with c1:
-        st.subheader(f"📈 Positive Watchlist (±{near_band_pp:.1f}pp)")
-        if positive.empty:
-            st.info("No open trades are near their historical avg **win** return.")
-        else:
-            cols = [
-                "symbol_display","sector","entry_date","entry","latest_close",
-                "unrealized_pct_return","avg_win_return","n_closed","win_rate"
-            ]
-            table = positive.loc[:, cols].copy()
-            table = date_only_cols(table, ["entry_date"])   # date-only
-            table["unrealized_pct_return"] = table["unrealized_pct_return"].map(lambda x: pct_str(x))
-            table["avg_win_return"]        = table["avg_win_return"].map(lambda x: pct_str(x))
-            table["win_rate"]              = table["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
-            table = add_rownum(table)
-            st.dataframe(table, use_container_width=True, hide_index=True)
-
-    with c2:
-        st.subheader(f"📉 Negative Watchlist (±{near_band_pp:.1f}pp)")
-        if negative.empty:
-            st.info("No open trades are near their historical avg **loss** return.")
-        else:
-            cols = [
-                "symbol_display","sector","entry_date","entry","latest_close",
-                "unrealized_pct_return","avg_loss_return","n_closed","win_rate"
-            ]
-            table = negative.loc[:, cols].copy()
-            table = date_only_cols(table, ["entry_date"])   # date-only
-            table["unrealized_pct_return"] = table["unrealized_pct_return"].map(lambda x: pct_str(x))
-            table["avg_loss_return"]       = table["avg_loss_return"].map(lambda x: pct_str(x))
-            table["win_rate"]              = table["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
-            table = add_rownum(table)
-            st.dataframe(table, use_container_width=True, hide_index=True)
-
-    # ---------- Open Trade Charts by Capital ----------
-    st.subheader("💲 Open Trade Summaries by Capital")
-    open_for_panels = open_trades.copy()
-    sorted_emojis = sorted(
-        open_for_panels["cap_emoji"].dropna().unique(),
-        key=lambda e: open_for_panels.loc[open_for_panels["cap_emoji"] == e, "cap_score"].min()
-    )
-
-    for emoji in sorted_emojis:
-        group = open_for_panels[open_for_panels["cap_emoji"] == emoji].copy()
-        with st.expander(f"📂 {emoji} — {len(group)} Open Trades", expanded=False):
-            for _, row in group.iterrows():
-                sym = row["symbol"]
-                symbol_disp = row["symbol_display"]
-
-                # series since entry
-                df_sym = df[(df["symbol"] == sym) & (df["date"] >= row["entry_date"])].copy()
-                for w in [10, 20, 50, 200]:
-                    df_sym[f"sma_{w}"] = df_sym["close"].rolling(w).mean()
-
-                st.markdown(f"### {symbol_disp} — Entry: {row['entry_date'].date()} @ ${row['entry']:.2f}")
-
-                fig = go.Figure()
-                fig.add_trace(go.Candlestick(
-                    x=df_sym["date"], open=df_sym["open"], high=df_sym["high"],
-                    low=df_sym["low"], close=df_sym["close"], name="Price"
-                ))
-                for w in [10, 20, 50, 200]:
-                    fig.add_trace(go.Scatter(x=df_sym["date"], y=df_sym[f"sma_{w}"], mode="lines", name=f"SMA-{w}"))
-
-                # Avg win / loss target lines (if we have them)
-                aw = avg_win_ret_map.get(sym)   # %
-                al = avg_loss_ret_map.get(sym)  # %
-                if pd.notna(aw):
-                    win_price = row["entry"] * (1 + aw/100.0)
-                    fig.add_trace(go.Scatter(
-                        x=df_sym["date"], y=[win_price]*len(df_sym),
-                        mode="lines", name="Avg Win Return",
-                        line=dict(dash="dash")
-                    ))
-                if pd.notna(al):
-                    loss_price = row["entry"] * (1 + al/100.0)
-                    fig.add_trace(go.Scatter(
-                        x=df_sym["date"], y=[loss_price]*len(df_sym),
-                        mode="lines", name="Avg Loss Return",
-                        line=dict(dash="dot")
-                    ))
-
-                fig.update_layout(
-                    height=500, margin=dict(l=10, r=10, t=30, b=10),
-                    showlegend=True, xaxis_title="Date", yaxis_title="Price",
-                    xaxis_rangeslider_visible=False
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-                # Panel text
-                st.markdown(f"""
-                - 🏢 **Sector**: {row['sector']}
-                - 🗓 **Days Since Entry**: {(df_sym['date'].max() - row['entry_date']).days}
-                - ⛔ **Stop Loss** (prior day low): ${row['stop_loss']:.2f}
-                - 💵 **Latest Close**: ${row['latest_close']:.2f}
-                - 💹 **Unrealized Return**: {pct_str(row['unrealized_pct_return'])}
-                - 📉 **Min Low Since Entry**: ${row['min_low']:.2f}
-                - 📈 **Max High Since Entry**: ${row['max_high']:.2f}
-                """)
+        cap_legend_df = (
+            open_trades[["cap_emoji","cap_score"]]
+            .dropna()
+            .drop_duplicates()
+            .sort_values("cap_score")
+        )
+        if not cap_legend_df.empty:
+            parts = [f"{r.cap_emoji} — score {int(r.cap_score)}" for r in cap_legend_df.itertuples(index=False)]
+            st.markdown("**Cap legend**")
+            st.caption(" | ".join(parts))
 
 # =========================================
-#               INSIGHTS
+#               INSIGHTS (Closed/analytics)
 # =========================================
 else:
     # ---- Full trades export
@@ -409,7 +255,6 @@ else:
         "symbol_display","cap_score","sector","entry_date","entry","outcome",
         "exit_price","exit_date","stop_loss","min_low","max_high","final_pct"
     ]]
-    # date-only in the CSV:
     csv_df = date_only_cols(all_trades_to_export, ["entry_date", "exit_date"])
     st.download_button(
         "📥 Download Full Trade History",
@@ -453,7 +298,7 @@ else:
         recent_exits["result"] = recent_exits.apply(_format_exit, axis=1)
         cols = ["symbol_display","sector","entry_date","exit_date","entry","exit_price","exit_reason","result"]
         show_df = recent_exits.loc[:, cols].sort_values("exit_date", ascending=False)
-        show_df = date_only_cols(show_df, ["entry_date","exit_date"])  # date-only
+        show_df = date_only_cols(show_df, ["entry_date","exit_date"])
         show_df = add_rownum(show_df)
         st.dataframe(show_df, use_container_width=True, hide_index=True)
 
