@@ -326,7 +326,7 @@ else:
         )
 
     # ---- Top 15 Tickers by Avg Return (Closed Trades)
-    st.subheader("🏆 Top 15 Tickers by Avg Return (Closed Trades)")
+    st.subheader("🏆 Top Tickers by Avg Return (Closed Trades)")
     if not closed.empty:
         best = (
             closed.groupby("symbol")
@@ -346,7 +346,7 @@ else:
         best["cap_emoji"]     = best["symbol"].map(cap_emoji_map)
         best["symbol_display"]= best.apply(lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r["cap_emoji"]) else r["symbol"], axis=1)
 
-        best = best.sort_values("avg_return", ascending=False).head(15)
+        best = best.sort_values("avg_return", ascending=False)
 
         disp = best.copy()
         disp["avg_return_str"]     = disp["avg_return"].map(lambda x: pct_str(x))
@@ -368,7 +368,7 @@ else:
         )
 
         st.download_button(
-            "📥 Download Top 15 (Avg Return + Win/Loss)",
+            "📥 Download (Avg Return + Win/Loss)",
             best.loc[:, ["symbol","sector","n_trades","avg_return","avg_win_return","avg_loss_return","avg_days"]]
                 .rename(columns={
                     "avg_return": "avg_return_pct",
@@ -377,7 +377,7 @@ else:
                     "avg_days": "avg_days_held"
                 })
                 .to_csv(index=False).encode("utf-8"),
-            "top15_avg_return_with_win_loss.csv","text/csv"
+            "top_avg_return_with_win_loss.csv","text/csv"
         )
     else:
         st.info("Not enough closed trades yet to compute historical leaders.")
