@@ -190,7 +190,10 @@ if page == "Home":
 
     # ---------- Latest Entries ----------
 st.subheader("🆕 Latest Entries")
-if not recent_entries.empty:
+
+if recent_entries.empty:
+    st.info("No recent entries in the last 7 days.")
+else:
     latest = recent_entries.copy()
 
     # attach hist stats
@@ -201,19 +204,25 @@ if not recent_entries.empty:
     latest["n_closed"]        = latest["symbol"].map(n_closed_map).fillna(0).astype(int)
 
     # price levels implied by historical %s
-    latest["guard_loss_price"]   = latest.apply(
-        lambda r: r["entry"] * (1 + r["avg_loss_return"]/100.0) if pd.notna(r["avg_loss_return"]) else pd.NA, axis=1
+    latest["guard_loss_price"] = latest.apply(
+        lambda r: r["entry"] * (1 + r["avg_loss_return"]/100.0)
+        if pd.notna(r["avg_loss_return"]) else pd.NA,
+        axis=1
     )
     latest["first_target_price"] = latest.apply(
-        lambda r: r["entry"] * (1 + r["avg_return"]/100.0) if pd.notna(r["avg_return"]) else pd.NA, axis=1
+        lambda r: r["entry"] * (1 + r["avg_return"]/100.0)
+        if pd.notna(r["avg_return"]) else pd.NA,
+        axis=1
     )
-    latest["win_target_price"]   = latest.apply(
-        lambda r: r["entry"] * (1 + r["avg_win_return"]/100.0) if pd.notna(r["avg_win_return"]) else pd.NA, axis=1
+    latest["win_target_price"] = latest.apply(
+        lambda r: r["entry"] * (1 + r["avg_win_return"]/100.0)
+        if pd.notna(r["avg_win_return"]) else pd.NA,
+        axis=1
     )
 
     # zone label based on proximity to hist %s (uses sidebar near_band_pp)
-    def zone_label(r):
-        u = r["unrealized_pct_return"]
+    def _zone_label(r):
+        u  = r["unrealized_pct_return"]
         aw = r["avg_win_return"]
         ar = r["avg_return"]
         al = r["avg_loss_return"]
@@ -225,11 +234,11 @@ if not recent_entries.empty:
             return "🟩 near avg win"
         return "—"
 
-    latest["zone"] = latest.apply(zone_label, axis=1)
+    latest["zone"] = latest.apply(_zone_label, axis=1)
 
     # sort: newest first, then higher avg win return
     latest["sort_win"] = latest["avg_win_return"].fillna(-1e9)
-    latest = latest.sort_values(by=["entry_date","sort_win"], ascending=[False, False]).drop(columns="sort_win")
+    latest = latest.sort_values(by=["entry_date", "sort_win"], ascending=[False, False]).drop(columns="sort_win")
 
     # pretty columns for display
     show = latest.loc[:, [
@@ -241,7 +250,7 @@ if not recent_entries.empty:
     ]].copy()
 
     # format
-    show = date_only_cols(show, ["entry_date"])
+    show = date_only_cols(show, ["entry_date"])  # uses your helper
     show["entry"]                 = show["entry"].map(money_str)
     show["latest_close"]          = show["latest_close"].map(money_str)
     show["unrealized_pct_return"] = show["unrealized_pct_return"].map(lambda x: pct_str(x))
@@ -271,8 +280,7 @@ if not recent_entries.empty:
     show = add_rownum(show)
 
     st.dataframe(show, use_container_width=True, hide_index=True)
-else:
-    st.info("No recent entries in the last 7 days.")
+
 
     # ---------- Positive / Negative Watchlists ----------
     # Attach hist stats to open trades
