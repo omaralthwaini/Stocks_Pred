@@ -25,7 +25,10 @@ def pct_str(x, digits=2, signed=True):
     fmt = f"{{:{'+' if signed else ''}.{digits}f}}%"
     return fmt.format(x)
 
-def date_only_cols(df_in, cols=("entry_date", "exit_date", "latest_date", "date")):
+def money_str(x):
+    return "—" if pd.isna(x) else f"${x:,.2f}"
+
+def date_only_cols(df_in, cols=("entry_date","exit_date","latest_date","date")):
     """
     Return a copy with selected datetime-like columns coerced to string 'YYYY-MM-DD'
     so Streamlit shows them without the '00:00:00' time.
@@ -34,20 +37,8 @@ def date_only_cols(df_in, cols=("entry_date", "exit_date", "latest_date", "date"
     for c in cols:
         if c in df.columns:
             s = pd.to_datetime(df[c], errors="coerce")
-            # where keeps original (e.g., already strings / NaT) for non-parsable values
             df[c] = s.dt.strftime("%Y-%m-%d").where(s.notna(), df[c])
     return df
-def money_str(x):
-    return "—" if pd.isna(x) else f"${x:,.2f}"
-
-def date_only_cols(df_in, cols=("entry_date","exit_date","latest_date","date")):
-    df = df_in.copy()
-    for c in cols:
-        if c in df.columns:
-            s = pd.to_datetime(df[c], errors="coerce")
-            df[c] = s.dt.strftime("%Y-%m-%d").where(s.notna(), df[c])
-    return df
-
 
 # =============== Sidebar ===============
 st.sidebar.header("View")
@@ -189,98 +180,96 @@ if page == "Home":
         kpi_cols[4].metric("Avg exit return (7d)", "—")
 
     # ---------- Latest Entries ----------
-st.subheader("🆕 Latest Entries")
+    st.subheader("🆕 Latest Entries")
 
-if recent_entries.empty:
-    st.info("No recent entries in the last 7 days.")
-else:
-    latest = recent_entries.copy()
+    if recent_entries.empty:
+        st.info("No recent entries in the last 7 days.")
+    else:
+        latest = recent_entries.copy()
 
-    # attach hist stats
-    latest["win_rate"]        = latest["symbol"].map(win_rate_map)         # 0..1
-    latest["avg_return"]      = latest["symbol"].map(avg_return_map)       # %
-    latest["avg_win_return"]  = latest["symbol"].map(avg_win_ret_map)      # %
-    latest["avg_loss_return"] = latest["symbol"].map(avg_loss_ret_map)     # %
-    latest["n_closed"]        = latest["symbol"].map(n_closed_map).fillna(0).astype(int)
+        # attach hist stats
+        latest["win_rate"]        = latest["symbol"].map(win_rate_map)         # 0..1
+        latest["avg_return"]      = latest["symbol"].map(avg_return_map)       # %
+        latest["avg_win_return"]  = latest["symbol"].map(avg_win_ret_map)      # %
+        latest["avg_loss_return"] = latest["symbol"].map(avg_loss_ret_map)     # %
+        latest["n_closed"]        = latest["symbol"].map(n_closed_map).fillna(0).astype(int)
 
-    # price levels implied by historical %s
-    latest["guard_loss_price"] = latest.apply(
-        lambda r: r["entry"] * (1 + r["avg_loss_return"]/100.0)
-        if pd.notna(r["avg_loss_return"]) else pd.NA,
-        axis=1
-    )
-    latest["first_target_price"] = latest.apply(
-        lambda r: r["entry"] * (1 + r["avg_return"]/100.0)
-        if pd.notna(r["avg_return"]) else pd.NA,
-        axis=1
-    )
-    latest["win_target_price"] = latest.apply(
-        lambda r: r["entry"] * (1 + r["avg_win_return"]/100.0)
-        if pd.notna(r["avg_win_return"]) else pd.NA,
-        axis=1
-    )
+        # price levels implied by historical %s
+        latest["guard_loss_price"] = latest.apply(
+            lambda r: r["entry"] * (1 + r["avg_loss_return"]/100.0)
+            if pd.notna(r["avg_loss_return"]) else pd.NA,
+            axis=1
+        )
+        latest["first_target_price"] = latest.apply(
+            lambda r: r["entry"] * (1 + r["avg_return"]/100.0)
+            if pd.notna(r["avg_return"]) else pd.NA,
+            axis=1
+        )
+        latest["win_target_price"] = latest.apply(
+            lambda r: r["entry"] * (1 + r["avg_win_return"]/100.0)
+            if pd.notna(r["avg_win_return"]) else pd.NA,
+            axis=1
+        )
 
-    # zone label based on proximity to hist %s (uses sidebar near_band_pp)
-    def _zone_label(r):
-        u  = r["unrealized_pct_return"]
-        aw = r["avg_win_return"]
-        ar = r["avg_return"]
-        al = r["avg_loss_return"]
-        if pd.notna(u) and pd.notna(al) and abs(u - al) <= near_band_pp:
-            return "🟥 near avg loss"
-        if pd.notna(u) and pd.notna(ar) and abs(u - ar) <= near_band_pp:
-            return "🟧 near avg return"
-        if pd.notna(u) and pd.notna(aw) and abs(u - aw) <= near_band_pp:
-            return "🟩 near avg win"
-        return "—"
+        # zone label based on proximity to hist %s (uses sidebar near_band_pp)
+        def _zone_label(r):
+            u  = r["unrealized_pct_return"]
+            aw = r["avg_win_return"]
+            ar = r["avg_return"]
+            al = r["avg_loss_return"]
+            if pd.notna(u) and pd.notna(al) and abs(u - al) <= near_band_pp:
+                return "🟥 near avg loss"
+            if pd.notna(u) and pd.notna(ar) and abs(u - ar) <= near_band_pp:
+                return "🟧 near avg return"
+            if pd.notna(u) and pd.notna(aw) and abs(u - aw) <= near_band_pp:
+                return "🟩 near avg win"
+            return "—"
 
-    latest["zone"] = latest.apply(_zone_label, axis=1)
+        latest["zone"] = latest.apply(_zone_label, axis=1)
 
-    # sort: newest first, then higher avg win return
-    latest["sort_win"] = latest["avg_win_return"].fillna(-1e9)
-    latest = latest.sort_values(by=["entry_date", "sort_win"], ascending=[False, False]).drop(columns="sort_win")
+        # sort: newest first, then higher avg win return
+        latest["sort_win"] = latest["avg_win_return"].fillna(-1e9)
+        latest = latest.sort_values(by=["entry_date", "sort_win"], ascending=[False, False]).drop(columns="sort_win")
 
-    # pretty columns for display
-    show = latest.loc[:, [
-        "symbol_display","sector","entry_date","entry","latest_close","unrealized_pct_return",
-        "guard_loss_price","avg_loss_return",
-        "first_target_price","avg_return",
-        "win_target_price","avg_win_return",
-        "zone","n_closed","win_rate"
-    ]].copy()
+        # pretty columns for display
+        show = latest.loc[:, [
+            "symbol_display","sector","entry_date","entry","latest_close","unrealized_pct_return",
+            "guard_loss_price","avg_loss_return",
+            "first_target_price","avg_return",
+            "win_target_price","avg_win_return",
+            "zone","n_closed","win_rate"
+        ]].copy()
 
-    # format
-    show = date_only_cols(show, ["entry_date"])  # uses your helper
-    show["entry"]                 = show["entry"].map(money_str)
-    show["latest_close"]          = show["latest_close"].map(money_str)
-    show["unrealized_pct_return"] = show["unrealized_pct_return"].map(lambda x: pct_str(x))
-    show["guard_loss_price"]      = show["guard_loss_price"].map(money_str)
-    show["first_target_price"]    = show["first_target_price"].map(money_str)
-    show["win_target_price"]      = show["win_target_price"].map(money_str)
-    show["avg_loss_return"]       = show["avg_loss_return"].map(lambda x: pct_str(x))
-    show["avg_return"]            = show["avg_return"].map(lambda x: pct_str(x))
-    show["avg_win_return"]        = show["avg_win_return"].map(lambda x: pct_str(x))
-    show["win_rate"]              = show["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
+        # format
+        show = date_only_cols(show, ["entry_date"])  # date-only
+        show["entry"]                 = show["entry"].map(money_str)
+        show["latest_close"]          = show["latest_close"].map(money_str)
+        show["unrealized_pct_return"] = show["unrealized_pct_return"].map(lambda x: pct_str(x))
+        show["guard_loss_price"]      = show["guard_loss_price"].map(money_str)
+        show["first_target_price"]    = show["first_target_price"].map(money_str)
+        show["win_target_price"]      = show["win_target_price"].map(money_str)
+        show["avg_loss_return"]       = show["avg_loss_return"].map(lambda x: pct_str(x))
+        show["avg_return"]            = show["avg_return"].map(lambda x: pct_str(x))
+        show["avg_win_return"]        = show["avg_win_return"].map(lambda x: pct_str(x))
+        show["win_rate"]              = show["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
 
-    # friendly column names
-    show = show.rename(columns={
-        "entry_date": "Entry date",
-        "unrealized_pct_return": "Unrealized",
-        "guard_loss_price": "Guard (avg loss)",
-        "avg_loss_return": "Avg loss %",
-        "first_target_price": "1st target (avg return)",
-        "avg_return": "Avg return %",
-        "win_target_price": "Win target (avg win)",
-        "avg_win_return": "Avg win %",
-        "n_closed": "# closed",
-        "win_rate": "Win rate"
-    })
+        # friendly column names
+        show = show.rename(columns={
+            "entry_date": "Entry date",
+            "unrealized_pct_return": "Unrealized",
+            "guard_loss_price": "Guard (avg loss)",
+            "avg_loss_return": "Avg loss %",
+            "first_target_price": "1st target (avg return)",
+            "avg_return": "Avg return %",
+            "win_target_price": "Win target (avg win)",
+            "avg_win_return": "Avg win %",
+            "n_closed": "# closed",
+            "win_rate": "Win rate"
+        })
 
-    # row numbers
-    show = add_rownum(show)
-
-    st.dataframe(show, use_container_width=True, hide_index=True)
-
+        # row numbers
+        show = add_rownum(show)
+        st.dataframe(show, use_container_width=True, hide_index=True)
 
     # ---------- Positive / Negative Watchlists ----------
     # Attach hist stats to open trades
@@ -320,7 +309,7 @@ else:
                 "unrealized_pct_return","avg_win_return","n_closed","win_rate"
             ]
             table = positive.loc[:, cols].copy()
-            table = date_only_cols(table, ["entry_date"])   # <-- date-only
+            table = date_only_cols(table, ["entry_date"])   # date-only
             table["unrealized_pct_return"] = table["unrealized_pct_return"].map(lambda x: pct_str(x))
             table["avg_win_return"]        = table["avg_win_return"].map(lambda x: pct_str(x))
             table["win_rate"]              = table["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
@@ -337,7 +326,7 @@ else:
                 "unrealized_pct_return","avg_loss_return","n_closed","win_rate"
             ]
             table = negative.loc[:, cols].copy()
-            table = date_only_cols(table, ["entry_date"])   # <-- date-only
+            table = date_only_cols(table, ["entry_date"])   # date-only
             table["unrealized_pct_return"] = table["unrealized_pct_return"].map(lambda x: pct_str(x))
             table["avg_loss_return"]       = table["avg_loss_return"].map(lambda x: pct_str(x))
             table["win_rate"]              = table["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
@@ -464,7 +453,7 @@ else:
         recent_exits["result"] = recent_exits.apply(_format_exit, axis=1)
         cols = ["symbol_display","sector","entry_date","exit_date","entry","exit_price","exit_reason","result"]
         show_df = recent_exits.loc[:, cols].sort_values("exit_date", ascending=False)
-        show_df = date_only_cols(show_df, ["entry_date","exit_date"])  # <-- date-only
+        show_df = date_only_cols(show_df, ["entry_date","exit_date"])  # date-only
         show_df = add_rownum(show_df)
         st.dataframe(show_df, use_container_width=True, hide_index=True)
 
