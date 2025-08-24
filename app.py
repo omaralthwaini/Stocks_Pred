@@ -413,10 +413,11 @@ if page == "Tester":
         "Allocation per trade (% of capital)", min_value=1.0, max_value=100.0, step=1.0, value=100.0, key="tester_alloc"
     )
 
+    # ---------- Selection mode ----------
     st.sidebar.subheader("Selection mode")
     selection_mode = st.sidebar.radio(
         "Trade selection mode",
-        ["By entries", "By tickers", "Top-N (avg return)"],
+        ["By entries", "By tickers", "Top-N (avg return)", "Top-N (avg win return)"],
         index=0,
         key="tester_mode"
     )
@@ -457,7 +458,7 @@ if page == "Tester":
         )
         chosen = candidates[candidates["symbol"].isin(chosen_syms)].copy()
 
-    else:  # Top-N (avg return)
+    elif selection_mode == "Top-N (avg return)":
         if perf.empty:
             st.warning("No historical performance available (no closed trades).")
             st.stop()
@@ -465,8 +466,8 @@ if page == "Tester":
         N = st.sidebar.number_input("Top-N by avg return", min_value=1, max_value=50, step=1, value=5, key="tester_topn")
         min_closed = st.sidebar.number_input("Min # closed trades", min_value=1, max_value=50, step=1, value=1, key="tester_minclosed")
 
-        perf_rank = (perf.dropna(subset=["avg_return"])
-                        .loc[perf["n_closed"] >= min_closed]
+        perf_rank = (perf.loc[perf["n_closed"] >= min_closed]
+                        .dropna(subset=["avg_return"])
                         .sort_values("avg_return", ascending=False))
 
         if perf_rank.empty:
@@ -480,13 +481,47 @@ if page == "Tester":
             st.warning("Top-N ranked tickers have no entries in the selected window.")
             st.stop()
 
-        st.caption("Selected top performers (by historical avg return):")
+        st.caption("Selected top performers (by historical **avg return**):")
         preview = perf_rank.loc[perf_rank["symbol"].isin(ranked_syms),
                                 ["symbol","avg_return","win_rate","n_closed"]].copy()
         preview["avg_return"] = preview["avg_return"].map(lambda x: pct_str(x))
         preview["win_rate"]   = preview["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
         st.dataframe(add_rownum(preview).rename(columns={
             "symbol":"Ticker","avg_return":"Avg return","win_rate":"Win rate","#":"#","n_closed":"Closed"
+        }), use_container_width=True, hide_index=True)
+
+        chosen = candidates[candidates["symbol"].isin(ranked_syms)].copy()
+
+    else:  # Top-N (avg win return)
+        if perf.empty:
+            st.warning("No historical performance available (no closed trades).")
+            st.stop()
+
+        N = st.sidebar.number_input("Top-N by avg **win** return", min_value=1, max_value=50, step=1, value=5, key="tester_topn_win")
+        min_closed = st.sidebar.number_input("Min # closed trades", min_value=1, max_value=50, step=1, value=1, key="tester_minclosed_win")
+
+        perf_win_rank = (perf.loc[perf["n_closed"] >= min_closed]
+                            .dropna(subset=["avg_win_return"])
+                            .sort_values("avg_win_return", ascending=False))
+
+        if perf_win_rank.empty:
+            st.warning("No tickers meet the minimum closed-trade filter for avg win return.")
+            st.stop()
+
+        syms_in_window = set(candidates["symbol"].unique().tolist())
+        ranked_syms = [s for s in perf_win_rank["symbol"].tolist() if s in syms_in_window][:int(N)]
+
+        if not ranked_syms:
+            st.warning("Top-N (avg win) ranked tickers have no entries in the selected window.")
+            st.stop()
+
+        st.caption("Selected top performers (by historical **avg win return**):")
+        preview = perf_win_rank.loc[perf_win_rank["symbol"].isin(ranked_syms),
+                                    ["symbol","avg_win_return","win_rate","n_closed"]].copy()
+        preview["avg_win_return"] = preview["avg_win_return"].map(lambda x: pct_str(x))
+        preview["win_rate"]       = preview["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
+        st.dataframe(add_rownum(preview).rename(columns={
+            "symbol":"Ticker","avg_win_return":"Avg win return","win_rate":"Win rate","#":"#","n_closed":"Closed"
         }), use_container_width=True, hide_index=True)
 
         chosen = candidates[candidates["symbol"].isin(ranked_syms)].copy()
@@ -542,11 +577,11 @@ if page == "Tester":
             status  = "Unrealized"
             available_from = end_ts + pd.Timedelta(days=1)
 
-        cap_before  = capital
-        invest_amt  = capital * (alloc_pct / 100.0)
-        cash_amt    = capital - invest_amt
-        invest_after= invest_amt * (1.0 + ret_pct/100.0)
-        capital     = cash_amt + invest_after
+        cap_before   = capital
+        invest_amt   = capital * (alloc_pct / 100.0)
+        cash_amt     = capital - invest_amt
+        invest_after = invest_amt * (1.0 + ret_pct/100.0)
+        capital      = cash_amt + invest_after
 
         days_held = (exit_d.normalize() - entry_d.normalize()).days if pd.notna(exit_d) \
                     else (end_ts.normalize() - entry_d.normalize()).days
@@ -602,4 +637,5 @@ if page == "Tester":
 
     st.caption("Rules: one position at a time; overlapping selected entries are skipped. "
                "Unrealized P/L uses the last available close at or before the selected end date. "
-               "Top-N uses historical avg return from closed trades and only tickers with entries in the chosen window.")
+               "Top-N can rank by historical avg return OR avg win return (from closed trades), "
+               "and only tickers with entries in the chosen window are considered.")
