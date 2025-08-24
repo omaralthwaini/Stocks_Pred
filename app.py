@@ -179,20 +179,30 @@ if page == "Home":
             if pd.notna(r["avg_win_return"]) else pd.NA, axis=1
         )
 
-        # zone color (emoji only)
-        def zone_emoji(r):
-            u  = r["unrealized_pct_return"]
-            aw = r["avg_win_return"]
-            ar = r["avg_return"]
-            al = r["avg_loss_return"]
-            if pd.notna(u) and pd.notna(al) and abs(u - al) <= near_band_pp:
-                return "🟥"
-            if pd.notna(u) and pd.notna(ar) and abs(u - ar) <= near_band_pp:
-                return "🟧"
-            if pd.notna(u) and pd.notna(aw) and abs(u - aw) <= near_band_pp:
-                return "🟩"
+        # --- REVISED ZONE LOGIC (uses price vs targets) ---
+        # 🟩 if latest_close >= 2nd target (within band below or above)
+        # 🟥 if latest_close <= guard (within band above or below)
+        # 🟧 if near 1st target (within band)
+        # ◻️ otherwise
+        def zone_emoji_by_price(r):
+            price = r["latest_close"]
+            t2 = r["win_target_price"]
+            g  = r["guard_loss_price"]
+            t1 = r["first_target_price"]
+            band = near_band_pp / 100.0  # convert pp to fraction
+
+            if pd.notna(price) and pd.notna(t2):
+                if price >= t2 * (1 - band):   # near or above 2nd target
+                    return "🟩"
+            if pd.notna(price) and pd.notna(g):
+                if price <= g * (1 + band):   # near or below guard
+                    return "🟥"
+            if pd.notna(price) and pd.notna(t1):
+                if abs(price - t1) / t1 <= band:  # around 1st target
+                    return "🟧"
             return "◻️"
-        open_trades["zone"] = open_trades.apply(zone_emoji, axis=1)
+
+        open_trades["zone"] = open_trades.apply(zone_emoji_by_price, axis=1)
 
         # sort newest entries first, then by cap_score (lower first)
         open_trades = open_trades.sort_values(["entry_date", "cap_score"], ascending=[False, True])
@@ -220,7 +230,7 @@ if page == "Home":
             "first_target_price": "1st target",
             "win_target_price": "2nd target",
             "latest_close": "Latest close",
-            "zone": " "  # visually minimal header for the colored dot/square
+            "zone": " "  # minimal header for the emoji
         })
 
         st.dataframe(show, use_container_width=True, hide_index=True)
@@ -228,10 +238,11 @@ if page == "Home":
         # --- Legends (compact, below the table) ---
         st.markdown("**Zone legend**")
         st.caption(
-            f"🟥 near avg **loss** (±{near_band_pp:.1f}pp)  •  "
-            f"🟧 near avg **return** (±{near_band_pp:.1f}pp)  •  "
-            f"🟩 near avg **win** (±{near_band_pp:.1f}pp)  •  "
-            f"◻️ not near any"
+            f"🟩 near/above **2nd target** (Avg Win %)  •  "
+            f"🟥 near/below **Guard** (Avg Loss %)  •  "
+            f"🟧 near **1st target** (Avg Return %)  •  "
+            f"◻️ not near any  "
+            f"(band ±{near_band_pp:.1f} pp on price vs target)"
         )
 
         cap_legend_df = (
