@@ -882,8 +882,8 @@ if page == "Optimizer":
                         min_hold_bars=int(min_hold),
                         buffer_mult=float(buffer_mult),
                         peak_giveback_pct=float(peak),
-                        maps_use_median=use_median_maps,
-                        maps_min_samples=min_samples_for_map,
+                        maps_use_median=use_median_maps
+                        #maps_min_samples=min_samples_for_map,
                     )
 
                     if trades_combo.empty:
