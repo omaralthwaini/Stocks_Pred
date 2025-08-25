@@ -9,10 +9,7 @@ st.set_page_config(page_title="Smart Backtester", layout="wide")
 st.title("📈 Smart Backtester")
 
 # =============== Helpers ===============
-def load_data():
-    df = pd.read_csv("stocks.csv", parse_dates=["date"])
-    caps = pd.read_csv("market_cap.csv")
-    return df.sort_values(["symbol", "date"]), caps
+
 
 def add_rownum(df_in):
     df = df_in.copy()
@@ -122,6 +119,8 @@ def compute_trades_and_perf(
                                    .groupby("symbol")["pct_return"].mean().to_dict())
     else:
         avg_win_map, avg_loss_map = {}, {}
+    
+    
 
     # 2) Enhanced run (applies guards only for entries on/after `enhanced_cutoff`)
     trades = run_strategy(
@@ -264,6 +263,10 @@ trades_seed   = st.session_state["trades_seed"]
 perf          = st.session_state["perf"]
 avg_win_map   = st.session_state["avg_win_map"]
 avg_loss_map  = st.session_state["avg_loss_map"]
+# NEW: provide maps/closed for Insights page
+sector_map    = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
+cap_emoji_map = caps.set_index("symbol")["cap_emoji"]
+closed        = trades[trades["exit_date"].notna()].copy()
 
 # Quick maps for lookups (from precomputed `perf`)
 win_rate_map      = perf.set_index("symbol")["win_rate"].to_dict() if not perf.empty else {}
