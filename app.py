@@ -9,7 +9,10 @@ st.set_page_config(page_title="Smart Backtester", layout="wide")
 st.title("📈 Smart Backtester")
 
 # =============== Helpers ===============
-
+def load_data():
+    df = pd.read_csv("stocks.csv", parse_dates=["date"])
+    caps = pd.read_csv("market_cap.csv")
+    return df.sort_values(["symbol", "date"]), caps
 
 def add_rownum(df_in):
     df = df_in.copy()
@@ -36,8 +39,7 @@ def date_only_cols(df_in, cols=("entry_date","exit_date","latest_date","date")):
 
 # =============== Sidebar ===============
 st.sidebar.header("View")
-page = st.sidebar.radio("Pick a page", ["Home", "Insights", "Tester", "Optimizer"], index=0)
-
+page = st.sidebar.radio("Pick a page", ["Home", "Insights", "Tester"], index=0)
 
 st.sidebar.header("Zone Sensitivity")
 near_band_pp = st.sidebar.number_input(
@@ -86,195 +88,140 @@ if profit_mode == "Peak giveback":
 else:
     profit_trail_peak_dd = None
 
-# =============== Load & Run Strategy (on-demand) ===============
-@st.cache_data(show_spinner=False)
-def load_data():
-    df = pd.read_csv("stocks.csv", parse_dates=["date"])
-    caps = pd.read_csv("market_cap.csv")
-    return df.sort_values(["symbol", "date"]).copy(), caps.copy()
-
-@st.cache_data(show_spinner=False)
-def compute_trades_and_perf(
-    df, caps,
-    enhanced_cutoff:str = "2025-01-01",
-    enhanced_guards_on:bool = True,
-    require_confirm_bars:int = 3,
-    min_hold_bars:int = 3,
-    buffer_mult:float = 1.0,
-    peak_giveback_pct:float = 8.0,
-    maps_use_median:bool = True,
-):
-    """
-    Runs the seed + enhanced strategies, builds avg win/loss maps, and returns
-    fully-enriched trades + perf (so the UI doesn't recompute any of that).
-    """
-    # 1) Seed run (no guards) -> avg win/loss maps from all history
-    trades_seed = run_strategy(df, caps)
-    closed_seed = trades_seed[trades_seed["exit_date"].notna()].copy()
-    if not closed_seed.empty:
-        closed_seed["pct_return"] = (closed_seed["exit_price"] / closed_seed["entry"] - 1) * 100
-        avg_win_map  = (closed_seed.loc[closed_seed["pct_return"] > 0]
-                                   .groupby("symbol")["pct_return"].mean().to_dict())
-        avg_loss_map = (closed_seed.loc[closed_seed["pct_return"] < 0]
-                                   .groupby("symbol")["pct_return"].mean().to_dict())
-    else:
-        avg_win_map, avg_loss_map = {}, {}
-    
-    
-
-    # 2) Enhanced run (applies guards only for entries on/after `enhanced_cutoff`)
-    trades = run_strategy(
-        df, caps,
-        avg_win_map=avg_win_map,
-        avg_loss_map=avg_loss_map,
-        enhanced_cutoff=enhanced_cutoff,
-        enhanced_guards_on=enhanced_guards_on,
-        require_confirm_bars=require_confirm_bars,
-        min_hold_bars=min_hold_bars,
-        buffer_mult=buffer_mult,
-        peak_giveback_pct=peak_giveback_pct,
-        maps_use_median=maps_use_median,
-    )
-
-    # === Enrichment (do it once, cached) ===
-    # maps
-    sector_map     = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
-    cap_score_map  = caps.set_index("symbol")["cap_score"]
-    cap_emoji_map  = caps.set_index("symbol")["cap_emoji"]
-
-    # sector/caps
-    trades["sector"]     = trades["symbol"].map(sector_map)
-    trades["cap_score"]  = trades["symbol"].map(cap_score_map)
-    trades["cap_emoji"]  = trades["symbol"].map(cap_emoji_map)
-
-    # exclude cap 3 & 4
-    _cap = pd.to_numeric(trades["cap_score"], errors="coerce")
-    trades = trades[~_cap.isin([3, 4])].copy()
-
-    # latest closes
-    latest_prices = (
-        df.sort_values("date")
-          .groupby("symbol", as_index=False)
-          .agg(latest_close=("close", "last"), latest_date=("date", "max"))
-    )
-    trades = trades.merge(latest_prices, on="symbol", how="left")
-
-    # stop-loss (prior day low at entry)
-    df_tmp = df.copy()
-    df_tmp["stop_loss"] = df_tmp.groupby("symbol")["low"].shift(1)
-    entry_lows = df_tmp[["symbol", "date", "stop_loss"]].rename(columns={"date": "entry_date"})
-    trades = trades.merge(entry_lows, on=["symbol", "entry_date"], how="left")
-
-    # returns
-    trades["pct_return"]            = (trades["exit_price"] / trades["entry"] - 1) * 100
-    trades["unrealized_pct_return"] = (trades["latest_close"] / trades["entry"] - 1) * 100
-    trades["final_pct"] = trades.apply(
-        lambda r: r["pct_return"] if pd.notna(r["exit_price"]) else r["unrealized_pct_return"], axis=1
-    )
-
-    # display symbol
-    trades["symbol_display"] = trades.apply(
-        lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r["cap_emoji"]) else r["symbol"], axis=1
-    )
-
-    # min/max since entry for OPEN trades
-    open_mask = trades["outcome"] == 0
-    minmax = []
-    if open_mask.any():
-        for _, rr in trades[open_mask].iterrows():
-            sym, entry_date = rr["symbol"], rr["entry_date"]
-            sl = df[(df["symbol"] == sym) & (df["date"] >= entry_date)]
-            if not sl.empty:
-                minmax.append((sym, entry_date, sl["low"].min(), sl["high"].max()))
-    minmax_df = pd.DataFrame(minmax, columns=["symbol", "entry_date", "min_low", "max_high"]) if minmax else \
-                pd.DataFrame(columns=["symbol","entry_date","min_low","max_high"])
-    trades = trades.merge(minmax_df, on=["symbol", "entry_date"], how="left")
-
-    # performance table from CLOSED trades
-    closed = trades[trades["exit_date"].notna()].copy()
-    if not closed.empty:
-        closed["win"] = closed["pct_return"] > 0
-        closed["days_held"] = (closed["exit_date"] - closed["entry_date"]).dt.days
-        base = (
-            closed.groupby("symbol")
-                  .agg(
-                      win_rate=("win", "mean"),
-                      avg_return=("pct_return", "mean"),
-                      n_closed=("pct_return", "size"),
-                      avg_days=("days_held", "mean")
-                  )
-                  .reset_index()
-        )
-        win_mean  = (closed.loc[closed["pct_return"] > 0].groupby("symbol")["pct_return"].mean().rename("avg_win_return"))
-        loss_mean = (closed.loc[closed["pct_return"] < 0].groupby("symbol")["pct_return"].mean().rename("avg_loss_return"))
-        perf = base.merge(win_mean, on="symbol", how="left").merge(loss_mean, on="symbol", how="left")
-    else:
-        perf = pd.DataFrame(columns=[
-            "symbol","win_rate","avg_return","n_closed","avg_days","avg_win_return","avg_loss_return"
-        ])
-
-    return {
-        "trades_seed": trades_seed,
-        "trades": trades,
-        "perf": perf,
-        "avg_win_map": avg_win_map,
-        "avg_loss_map": avg_loss_map,
-    }
-
-# ---- Load data only once (cached) ----
+# =============== Load & Run Strategy ===============
 df, caps = load_data()
 
-# ---- Sidebar: parameters that affect STRATEGY ONLY (don’t recompute until button) ----
-with st.sidebar.expander("Strategy run (compute on click)", expanded=True):
-    enhanced_on = st.checkbox("Use enhanced exits (2025+ only)", value=True)
-    cutoff_date = st.date_input("Enhanced exits from", pd.to_datetime("2025-01-01").date())
-    confirm_bars = st.selectbox("Confirm bars (1..3)", [1,2,3], index=2)
-    min_hold_bars = st.selectbox("Min hold bars (2..3)", [2,3], index=1)
-    buffer_mult = st.number_input("Buffer (×)", min_value=0.5, max_value=2.0, step=0.1, value=1.0)
-    peak_giveback = st.number_input("Peak giveback (%)", min_value=0.0, max_value=30.0, step=0.5, value=8.0)
-    use_median_maps = st.checkbox("Use median maps (robust)", value=True)
+# ---- 1) Seed run (no guards) -> build avg win/loss maps from *all* closed trades
+with st.spinner("⏳ Detecting trades (seed)…"):
+    trades_seed = run_strategy(df, caps)
 
-    run_click = st.button("🔁 Run / Update strategy")
+# Build maps from seed closed trades
+closed_seed = trades_seed[trades_seed["exit_date"].notna()].copy()
+if not closed_seed.empty:
+    closed_seed["pct_return"] = (closed_seed["exit_price"] / closed_seed["entry"] - 1) * 100
+    avg_win_map  = (closed_seed.loc[closed_seed["pct_return"] > 0]
+                               .groupby("symbol")["pct_return"].mean().to_dict())
+    avg_loss_map = (closed_seed.loc[closed_seed["pct_return"] < 0]
+                               .groupby("symbol")["pct_return"].mean().to_dict())
+else:
+    avg_win_map, avg_loss_map = {}, {}
 
-# ---- Run only when user clicks the button ----
-if run_click or ("trades" not in st.session_state):
-    with st.spinner("⏳ Computing strategy…"):
-        res = compute_trades_and_perf(
+# ---- 2) Main run (optionally enhanced for 2025+ using the maps & sidebar knobs)
+if use_enhanced:
+    with st.spinner("⏳ Detecting trades (enhanced 2025+ guards)…"):
+        trades = run_strategy(
             df, caps,
-            enhanced_cutoff=str(pd.Timestamp(cutoff_date).date()),
-            enhanced_guards_on=enhanced_on,
-            require_confirm_bars=int(confirm_bars),
+            avg_win_map=avg_win_map,
+            avg_loss_map=avg_loss_map,
+            enhanced_cutoff=str(pd.Timestamp(cutoff_date_ui).date()),  # "YYYY-MM-DD"
+            guard_buffer_pp=float(guard_buffer_pp),
+            guard_confirm_bars=int(guard_confirm_bars),
             min_hold_bars=int(min_hold_bars),
-            buffer_mult=float(buffer_mult),
-            peak_giveback_pct=float(peak_giveback),
-            maps_use_median=bool(use_median_maps),
+            # Pass giveback % only when using Peak giveback mode; otherwise None = disabled
+            profit_trail_peak_dd=float(profit_trail_peak_dd) if profit_trail_peak_dd is not None else None,
         )
-    st.session_state.update(res)
-    st.success(f"✅ Computed {len(st.session_state['trades'])} trades.")
+else:
+    with st.spinner("⏳ Detecting trades…"):
+        trades = run_strategy(df, caps)
 
-# If still nothing computed, stop here (avoids downstream errors)
-if "trades" not in st.session_state:
-    st.info("Set parameters and click **Run / Update strategy** in the sidebar.")
+if trades.empty:
+    st.warning("⚠️ No trades found.")
     st.stop()
+else:
+    st.success(f"✅ {len(trades)} trades detected.")
 
-# Use the precomputed results everywhere else in the app
-trades        = st.session_state["trades"]
-trades_seed   = st.session_state["trades_seed"]
-perf          = st.session_state["perf"]
-avg_win_map   = st.session_state["avg_win_map"]
-avg_loss_map  = st.session_state["avg_loss_map"]
-# NEW: provide maps/closed for Insights page
-sector_map    = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
-cap_emoji_map = caps.set_index("symbol")["cap_emoji"]
-closed        = trades[trades["exit_date"].notna()].copy()
 
-# Quick maps for lookups (from precomputed `perf`)
-win_rate_map      = perf.set_index("symbol")["win_rate"].to_dict() if not perf.empty else {}
-avg_return_map    = perf.set_index("symbol")["avg_return"].to_dict() if not perf.empty else {}
-avg_win_ret_map   = perf.set_index("symbol")["avg_win_return"].to_dict() if not perf.empty else {}
-avg_loss_ret_map  = perf.set_index("symbol")["avg_loss_return"].to_dict() if not perf.empty else {}
-n_closed_map      = perf.set_index("symbol")["n_closed"].to_dict() if not perf.empty else {}
-avg_days_map      = perf.set_index("symbol")["avg_days"].to_dict() if not perf.empty else {}
+# ---- Sector / Cap maps
+sector_map     = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
+cap_score_map  = caps.set_index("symbol")["cap_score"]
+cap_emoji_map  = caps.set_index("symbol")["cap_emoji"]
+
+trades["sector"]     = trades["symbol"].map(sector_map)
+trades["cap_score"]  = trades["symbol"].map(cap_score_map)
+trades["cap_emoji"]  = trades["symbol"].map(cap_emoji_map)
+
+# Exclude cap 3 & 4
+_cap = pd.to_numeric(trades["cap_score"], errors="coerce")
+trades = trades[~_cap.isin([3, 4])].copy()
+
+# ---- Latest close per symbol
+latest_prices = (
+    df.sort_values("date")
+      .groupby("symbol", as_index=False)
+      .agg(latest_close=("close", "last"), latest_date=("date", "max"))
+)
+trades = trades.merge(latest_prices, on="symbol", how="left")
+
+# ---- Stop-loss reference (prior day low at entry)
+df["stop_loss"] = df.groupby("symbol")["low"].shift(1)
+entry_lows = df[["symbol", "date", "stop_loss"]].rename(columns={"date": "entry_date"})
+trades = trades.merge(entry_lows, on=["symbol", "entry_date"], how="left")
+
+# ---- Returns
+trades["pct_return"]            = (trades["exit_price"] / trades["entry"] - 1) * 100
+trades["unrealized_pct_return"] = (trades["latest_close"] / trades["entry"] - 1) * 100
+trades["final_pct"] = trades.apply(
+    lambda r: r["pct_return"] if pd.notna(r["exit_price"]) else r["unrealized_pct_return"],
+    axis=1
+)
+
+# ---- Emoji symbol display
+trades["symbol_display"] = trades.apply(
+    lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r["cap_emoji"]) else r["symbol"],
+    axis=1
+)
+
+# ---- Min/Max since entry for OPEN trades
+open_mask = trades["outcome"] == 0
+minmax = []
+if open_mask.any():
+    for _, r in trades[open_mask].iterrows():
+        sym, entry_date = r["symbol"], r["entry_date"]
+        sl = df[(df["symbol"] == sym) & (df["date"] >= entry_date)]
+        if not sl.empty:
+            minmax.append((sym, entry_date, sl["low"].min(), sl["high"].max()))
+minmax_df = (
+    pd.DataFrame(minmax, columns=["symbol", "entry_date", "min_low", "max_high"])
+    if minmax else pd.DataFrame(columns=["symbol","entry_date","min_low","max_high"])
+)
+trades = trades.merge(minmax_df, on=["symbol", "entry_date"], how="left")
+
+# ---- CLOSED-only historical stats per ticker
+closed = trades[trades["exit_date"].notna()].copy()
+if not closed.empty:
+    closed["win"] = closed["pct_return"] > 0
+    closed["days_held"] = (closed["exit_date"] - closed["entry_date"]).dt.days
+
+    base = (
+        closed.groupby("symbol")
+              .agg(
+                  win_rate=("win", "mean"),       # 0..1
+                  avg_return=("pct_return", "mean"),
+                  n_closed=("pct_return", "size"),
+                  avg_days=("days_held", "mean")
+              )
+              .reset_index()
+    )
+    win_mean  = (closed.loc[closed["pct_return"] > 0]
+                        .groupby("symbol")["pct_return"]
+                        .mean().rename("avg_win_return"))
+    loss_mean = (closed.loc[closed["pct_return"] < 0]
+                        .groupby("symbol")["pct_return"]
+                        .mean().rename("avg_loss_return"))
+    perf = base.merge(win_mean, on="symbol", how="left").merge(loss_mean, on="symbol", how="left")
+else:
+    perf = pd.DataFrame(columns=[
+        "symbol","win_rate","avg_return","n_closed","avg_days",
+        "avg_win_return","avg_loss_return"
+    ])
+
+# Quick maps for lookups
+win_rate_map      = perf.set_index("symbol")["win_rate"].to_dict()          # 0..1
+avg_return_map    = perf.set_index("symbol")["avg_return"].to_dict()        # %
+avg_win_ret_map   = perf.set_index("symbol")["avg_win_return"].to_dict()    # %
+avg_loss_ret_map  = perf.set_index("symbol")["avg_loss_return"].to_dict()   # %
+n_closed_map      = perf.set_index("symbol")["n_closed"].to_dict()
+avg_days_map      = perf.set_index("symbol")["avg_days"].to_dict()
 
 # =========================================
 #                 HOME (Open trades)
@@ -765,313 +712,3 @@ if page == "Tester":
                "Unrealized P/L uses the last available close at or before the selected end date. "
                "Top-N can rank by historical avg return OR avg win return (from closed trades), "
                "and only tickers with entries in the chosen window are considered.")
-    
-    # =========================================# =========================================
-#                 OPTIMIZER
-# =========================================
-if page == "Optimizer":
-    st.subheader("🧪 Parameter Optimizer — Peak-Giveback (one position at a time)")
-
-    st.sidebar.header("Optimizer Settings")
-
-    # ---- Date window (only entries INSIDE this window are simulated)
-    min_entry = pd.to_datetime(trades["entry_date"]).min()
-    max_date  = pd.to_datetime(df["date"]).max()
-    start_date = st.sidebar.date_input(
-        "Start date",
-        value=max(pd.to_datetime("2025-01-01").date(), (min_entry.date() if pd.notna(min_entry) else pd.Timestamp.today().date()))
-    )
-    end_date = st.sidebar.date_input(
-        "End date",
-        value=max_date.date() if pd.notna(max_date) else pd.Timestamp.today().date(),
-        min_value=start_date
-    )
-
-    # ---- Capital & allocation for the simulation
-    starting_capital = st.sidebar.number_input("Starting capital ($)", min_value=1000.0, step=500.0, value=10000.0)
-    alloc_pct = st.sidebar.number_input("Allocation per trade (% of capital)", min_value=1.0, max_value=100.0, step=1.0, value=100.0)
-
-    # ---- Enhanced exits cutoff (keep at 2025-01-01 unless you want to compare)
-    cutoff_default = pd.to_datetime("2025-01-01").date()
-    enhanced_cutoff = st.sidebar.date_input("Enhanced exits from date", value=cutoff_default)
-
-    # ---- Universe selection: All vs Top-N by avg return
-    st.sidebar.subheader("Universe")
-    universe_mode = st.sidebar.radio(
-        "Which symbols should the optimizer test?",
-        ["All tickers", "Top-N by avg return"],
-        index=1,  # default to Top-N per your plan
-        key="opt_universe_mode"
-    )
-
-    topN = None
-    min_closed_for_rank = None
-    if universe_mode == "Top-N by avg return":
-        topN = int(st.sidebar.number_input("Top-N (avg return)", min_value=1, max_value=50, step=1, value=5, key="opt_topN"))
-        min_closed_for_rank = int(st.sidebar.number_input("Min # closed trades", min_value=1, max_value=50, step=1, value=1, key="opt_min_closed"))
-
-    # ---- Grid choices (Peak, Confirm, Min-hold). Buffer fixed at 1.0
-    st.sidebar.markdown("**Grid — what to try**")
-    peak_choices = st.sidebar.multiselect("Peak giveback (%)", [6, 7, 8, 9, 10, 12], default=[8, 9, 10], key="opt_peaks")
-    confirm_choices = st.sidebar.multiselect("Confirm bars (1..3)", [1, 2, 3], default=[2, 3], key="opt_confirms")
-    min_hold_choices = st.sidebar.multiselect("Min hold bars (2 or 3)", [2, 3], default=[3], key="opt_minholds")
-
-    buffer_mult = 1.0                # fixed (don’t over-iterate)
-    use_median_maps = True           # more robust average for guards
-    # We are NOT using avg-win guard in the optimizer loop; only peak-giveback.
-
-    run_btn = st.sidebar.button("🚀 Run optimization")
-
-    # ---------- Helpers ----------
-    def _build_last_close_dicts(end_ts: pd.Timestamp):
-        last_close_upto = (
-            df[df["date"] <= end_ts].sort_values("date")
-              .groupby("symbol", as_index=False)
-              .agg(last_close_upto=("close", "last"))
-              .set_index("symbol")["last_close_upto"]
-              .to_dict()
-        )
-        latest_fallback = (
-            df.sort_values("date").groupby("symbol", as_index=False)
-              .agg(latest_close=("close","last"))
-              .set_index("symbol")["latest_close"]
-              .to_dict()
-        )
-        return last_close_upto, latest_fallback
-
-    def _last_close_for(symbol, last_close_upto, latest_fallback):
-        v = last_close_upto.get(symbol)
-        if pd.isna(v) or v is None:
-            return latest_fallback.get(symbol)
-        return v
-
-    # One-position-at-a-time simulation (same logic as Tester)
-    def simulate_one_position_at_a_time(trades_df, start_ts, end_ts, alloc_pct, last_close_upto, latest_fallback):
-        capital = float(starting_capital)
-        available_from = start_ts
-        ledger = []
-
-        # only entries inside the window
-        chosen = trades_df[(trades_df["entry_date"] >= start_ts) & (trades_df["entry_date"] <= end_ts)].copy()
-        if chosen.empty:
-            return capital, pd.DataFrame(ledger)
-
-        for _, r in chosen.sort_values("entry_date").iterrows():
-            entry_d = pd.to_datetime(r["entry_date"])
-            if entry_d < available_from:
-                continue
-
-            sym   = r["symbol"]
-            entry = float(r["entry"])
-            ex_d  = pd.to_datetime(r["exit_date"]) if pd.notna(r["exit_date"]) else pd.NaT
-            realized = pd.notna(ex_d) and (ex_d <= end_ts)
-
-            if realized:
-                exit_px = float(r["exit_price"])
-                ret_pct = (exit_px / entry - 1.0) * 100.0
-                exit_d  = ex_d
-                status  = "Realized"
-                available_from = ex_d + pd.Timedelta(days=1)
-            else:
-                lc = _last_close_for(sym, last_close_upto, latest_fallback)
-                if lc is None or pd.isna(lc):
-                    continue
-                exit_px = float(lc)
-                ret_pct = (exit_px / entry - 1.0) * 100.0
-                exit_d  = pd.NaT
-                status  = "Unrealized"
-                available_from = end_ts + pd.Timedelta(days=1)
-
-            cap_before   = capital
-            invest_amt   = capital * (alloc_pct / 100.0)
-            cash_amt     = capital - invest_amt
-            invest_after = invest_amt * (1.0 + ret_pct/100.0)
-            capital      = cash_amt + invest_after
-
-            days_held = (exit_d.normalize() - entry_d.normalize()).days if pd.notna(exit_d) \
-                        else (end_ts.normalize() - entry_d.normalize()).days
-
-            ledger.append({
-                "symbol": sym,
-                "entry_date": entry_d,
-                "exit_date": exit_d,
-                "status": status,
-                "entry": entry,
-                "exit_or_last": exit_px,
-                "ret_pct": ret_pct,
-                "days_held": days_held,
-                "capital_after": capital,
-            })
-
-        return capital, pd.DataFrame(ledger)
-
-    if run_btn:
-        if not peak_choices or not confirm_choices or not min_hold_choices:
-            st.warning("Pick at least one value for each of: Peak, Confirm bars, Min hold.")
-            st.stop()
-
-        start_ts = pd.Timestamp(start_date)
-        end_ts   = pd.Timestamp(end_date)
-        cutoff_ts = pd.Timestamp(enhanced_cutoff)
-
-        # ---- 1) Build the Universe we will test ----
-        # We’ll use `trades_seed` for “who has entries in the window?”, then intersect with Top-N if selected.
-        seed_window = trades_seed[
-            (pd.to_datetime(trades_seed["entry_date"]) >= start_ts) &
-            (pd.to_datetime(trades_seed["entry_date"]) <= end_ts)
-        ].copy()
-
-        if seed_window.empty:
-            st.info("No strategy entries (seed) inside the selected window — widen dates.")
-            st.stop()
-
-        if universe_mode == "All tickers":
-            universe_syms = sorted(seed_window["symbol"].unique().tolist())
-            st.caption(f"Universe: All symbols with entries in window ({len(universe_syms)} tickers).")
-        else:
-            if perf.empty:
-                st.warning("No historical performance available (no closed trades) to rank Top-N.")
-                st.stop()
-
-            perf_rank = (
-                perf.loc[perf["n_closed"] >= min_closed_for_rank]
-                    .dropna(subset=["avg_return"])
-                    .sort_values("avg_return", ascending=False)
-            )
-            if perf_rank.empty:
-                st.warning("No tickers meet the minimum closed-trade filter.")
-                st.stop()
-
-            syms_in_window = set(seed_window["symbol"].unique().tolist())
-            ranked_syms = [s for s in perf_rank["symbol"].tolist() if s in syms_in_window][:topN]
-            if not ranked_syms:
-                st.warning("Top-N ranked tickers have no entries in the selected window.")
-                st.stop()
-
-            # Show who we picked
-            st.caption("Selected Top-N (by historical avg return):")
-            preview = perf_rank.loc[perf_rank["symbol"].isin(ranked_syms),
-                                    ["symbol","avg_return","win_rate","n_closed"]].copy()
-            preview["avg_return"] = preview["avg_return"].map(lambda x: pct_str(x))
-            preview["win_rate"]   = preview["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
-            st.dataframe(add_rownum(preview).rename(columns={
-                "symbol":"Ticker","avg_return":"Avg return","win_rate":"Win rate",
-                "#":"#","n_closed":"Closed"
-            }), use_container_width=True, hide_index=True)
-
-            universe_syms = ranked_syms
-
-        # ---- 2) Price lookups once (for unrealized P/L)
-        last_close_upto, latest_fallback = _build_last_close_dicts(end_ts)
-
-        # ---- 3) Grid search over Peak/Confirm/Min-hold (peak-giveback only)
-        results = []
-        grid_total = len(peak_choices) * len(confirm_choices) * len(min_hold_choices)
-        prog = st.progress(0)
-        step = 0
-
-        for peak in sorted(set(peak_choices)):
-            for confirm in sorted(set(confirm_choices)):
-                for min_hold in sorted(set(min_hold_choices)):
-                    step += 1
-                    prog.progress(min(step / grid_total, 1.0))
-
-                    trades_combo = run_strategy(
-                        df, caps,
-                        # maps from SEED run (already computed above)
-                        avg_win_map=avg_win_map,
-                        avg_loss_map=avg_loss_map,
-                        # Enhanced exits only for entries on/after cutoff
-                        enhanced_cutoff=cutoff_ts.strftime("%Y-%m-%d"),
-                        enhanced_guards_on=True,
-                        # We are using PEAK-GIVEBACK guard only:
-                        require_confirm_bars=int(confirm),
-                        min_hold_bars=int(min_hold),
-                        buffer_mult=float(buffer_mult),
-                        peak_giveback_pct=float(peak),
-                        maps_use_median=use_median_maps,
-                        # avg-win guard is OFF by passing no threshold param (or leave as implemented in strategy)
-                    )
-
-                    if trades_combo.empty:
-                        continue
-
-                    # Filter to UNIVERSE and DATE WINDOW before sim
-                    trades_combo = trades_combo[trades_combo["symbol"].isin(universe_syms)].copy()
-                    if trades_combo.empty:
-                        continue
-
-                    final_cap, ledger = simulate_one_position_at_a_time(
-                        trades_combo, start_ts, end_ts, alloc_pct, last_close_upto, latest_fallback
-                    )
-
-                    # Metrics
-                    n_trades = len(ledger)
-                    realized_mask = (ledger["status"] == "Realized") if n_trades else pd.Series([], dtype=bool)
-                    n_real = int(realized_mask.sum()) if n_trades else 0
-                    win_rate = (ledger.loc[realized_mask, "ret_pct"] > 0).mean() if n_real else float("nan")
-                    avg_real = ledger.loc[realized_mask, "ret_pct"].mean() if n_real else float("nan")
-                    best_real = ledger.loc[realized_mask, "ret_pct"].max() if n_real else float("nan")
-                    worst_real = ledger.loc[realized_mask, "ret_pct"].min() if n_real else float("nan")
-                    total_ret_pct = (final_cap / starting_capital - 1.0) * 100.0
-
-                    results.append({
-                        "Peak %": peak,
-                        "Confirm": confirm,
-                        "Min hold": min_hold,
-                        "Final capital": final_cap,
-                        "Total return %": total_ret_pct,
-                        "Trades": n_trades,
-                        "Realized": n_real,
-                        "Win rate": win_rate,
-                        "Avg realized %": avg_real,
-                        "Best %": best_real,
-                        "Worst %": worst_real,
-                        "ledger": ledger
-                    })
-
-        if not results:
-            st.info("No valid trades found for the selected grid / window / universe.")
-            st.stop()
-
-        # ---- 4) Show results
-        res_df = pd.DataFrame(results).sort_values("Final capital", ascending=False).reset_index(drop=True)
-
-        res_show = res_df.drop(columns=["ledger"]).copy()
-        res_show["Final capital"]   = res_show["Final capital"].map(money_str)
-        res_show["Total return %"]  = res_show["Total return %"].map(lambda x: pct_str(x))
-        res_show["Win rate"]        = res_show["Win rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
-        for c in ["Avg realized %", "Best %", "Worst %"]:
-            res_show[c] = res_show[c].map(lambda x: pct_str(x))
-        st.subheader("🏆 Grid Results (sorted by Final capital)")
-        st.dataframe(add_rownum(res_show), use_container_width=True, hide_index=True)
-
-        best = res_df.iloc[0]
-        st.markdown(
-            f"**Best combo:** Peak={best['Peak %']}%, Confirm={best['Confirm']}, Min hold={best['Min hold']}  "
-            f"• Final capital: {money_str(best['Final capital'])}  "
-            f"• Total return: {pct_str(best['Total return %'])}  "
-            f"• Win rate: {'—' if pd.isna(best['Win rate']) else f'{best['Win rate']:.0%}'}"
-        )
-
-        st.subheader("📜 Best Combo — Trade Ledger")
-        ledger = best["ledger"].copy()
-        if not ledger.empty:
-            ledger = date_only_cols(ledger, ["entry_date","exit_date"])
-            ledger["entry"]        = ledger["entry"].map(money_str)
-            ledger["exit_or_last"] = ledger["exit_or_last"].map(money_str)
-            ledger["ret_pct"]      = ledger["ret_pct"].map(lambda x: pct_str(x))
-            ledger["capital_after"]= ledger["capital_after"].map(money_str)
-            st.dataframe(add_rownum(ledger.rename(columns={
-                "exit_or_last": "Exit / Last",
-                "ret_pct": "Return",
-            })), use_container_width=True, hide_index=True)
-
-        st.caption(
-            "Notes: Optimizer uses the peak-giveback enhanced exits only for entries on/after the chosen cutoff. "
-            "Top-N is ranked by historical avg return from closed trades (the 'Insights' perf table), "
-            "then intersected with symbols that actually have entries in your date window (based on the seed run). "
-            "Simulation assumes one position at a time with compounding."
-        )
-    else:
-        st.info("Pick your grid and click **Run optimization** to benchmark parameter combinations.")
