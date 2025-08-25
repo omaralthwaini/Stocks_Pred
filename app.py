@@ -714,20 +714,20 @@ if page == "Tester":
                "Top-N can rank by historical avg return OR avg win return (from closed trades), "
                "and only tickers with entries in the chosen window are considered.")
     
-    # =========================================
-#               OPTIMIZER
+    # =========================================# =========================================
+#                 OPTIMIZER
 # =========================================
 if page == "Optimizer":
-    st.subheader("🧪 Parameter Optimizer — (one position at a time)")
+    st.subheader("🧪 Parameter Optimizer — Peak-Giveback (one position at a time)")
 
     st.sidebar.header("Optimizer Settings")
 
-    # ---- Date window (only entries inside this window are simulated)
+    # ---- Date window (only entries INSIDE this window are simulated)
     min_entry = pd.to_datetime(trades["entry_date"]).min()
     max_date  = pd.to_datetime(df["date"]).max()
     start_date = st.sidebar.date_input(
         "Start date",
-        value=min_entry.date() if pd.notna(min_entry) else pd.Timestamp.today().date()
+        value=max(pd.to_datetime("2025-01-01").date(), (min_entry.date() if pd.notna(min_entry) else pd.Timestamp.today().date()))
     )
     end_date = st.sidebar.date_input(
         "End date",
@@ -739,30 +739,38 @@ if page == "Optimizer":
     starting_capital = st.sidebar.number_input("Starting capital ($)", min_value=1000.0, step=500.0, value=10000.0)
     alloc_pct = st.sidebar.number_input("Allocation per trade (% of capital)", min_value=1.0, max_value=100.0, step=1.0, value=100.0)
 
-    # ---- Cutoff for enhanced exits (usually 2025-01-01)
+    # ---- Enhanced exits cutoff (keep at 2025-01-01 unless you want to compare)
     cutoff_default = pd.to_datetime("2025-01-01").date()
     enhanced_cutoff = st.sidebar.date_input("Enhanced exits from date", value=cutoff_default)
 
-    # ---- Grid choices
-    st.sidebar.markdown("**Grid — what to try**")
-    peak_choices = st.sidebar.multiselect(
-        "Peak giveback (%) choices", [8, 9, 10, 11, 12],
-        default=[8, 10, 12]
-    )
-    confirm_choices = st.sidebar.multiselect(
-        "Confirm bars (1..3)", [1, 2, 3], default=[2, 3]
-    )
-    min_hold_choices = st.sidebar.multiselect(
-        "Min hold bars (2 or 3)", [2, 3], default=[3]
+    # ---- Universe selection: All vs Top-N by avg return
+    st.sidebar.subheader("Universe")
+    universe_mode = st.sidebar.radio(
+        "Which symbols should the optimizer test?",
+        ["All tickers", "Top-N by avg return"],
+        index=1,  # default to Top-N per your plan
+        key="opt_universe_mode"
     )
 
-    buffer_mult = 1.0  # fixed per your idea
-    use_median_maps = True
-    min_samples_for_map = 3
+    topN = None
+    min_closed_for_rank = None
+    if universe_mode == "Top-N by avg return":
+        topN = int(st.sidebar.number_input("Top-N (avg return)", min_value=1, max_value=50, step=1, value=5, key="opt_topN"))
+        min_closed_for_rank = int(st.sidebar.number_input("Min # closed trades", min_value=1, max_value=50, step=1, value=1, key="opt_min_closed"))
+
+    # ---- Grid choices (Peak, Confirm, Min-hold). Buffer fixed at 1.0
+    st.sidebar.markdown("**Grid — what to try**")
+    peak_choices = st.sidebar.multiselect("Peak giveback (%)", [6, 7, 8, 9, 10, 12], default=[8, 9, 10], key="opt_peaks")
+    confirm_choices = st.sidebar.multiselect("Confirm bars (1..3)", [1, 2, 3], default=[2, 3], key="opt_confirms")
+    min_hold_choices = st.sidebar.multiselect("Min hold bars (2 or 3)", [2, 3], default=[3], key="opt_minholds")
+
+    buffer_mult = 1.0                # fixed (don’t over-iterate)
+    use_median_maps = True           # more robust average for guards
+    # We are NOT using avg-win guard in the optimizer loop; only peak-giveback.
 
     run_btn = st.sidebar.button("🚀 Run optimization")
 
-    # Helper: last close lookups up to end date (used for unrealized)
+    # ---------- Helpers ----------
     def _build_last_close_dicts(end_ts: pd.Timestamp):
         last_close_upto = (
             df[df["date"] <= end_ts].sort_values("date")
@@ -785,7 +793,7 @@ if page == "Optimizer":
             return latest_fallback.get(symbol)
         return v
 
-    # One-position-at-a-time simulation, like the Tester
+    # One-position-at-a-time simulation (same logic as Tester)
     def simulate_one_position_at_a_time(trades_df, start_ts, end_ts, alloc_pct, last_close_upto, latest_fallback):
         capital = float(starting_capital)
         available_from = start_ts
@@ -854,13 +862,58 @@ if page == "Optimizer":
         end_ts   = pd.Timestamp(end_date)
         cutoff_ts = pd.Timestamp(enhanced_cutoff)
 
-        # Build price lookups once
+        # ---- 1) Build the Universe we will test ----
+        # We’ll use `trades_seed` for “who has entries in the window?”, then intersect with Top-N if selected.
+        seed_window = trades_seed[
+            (pd.to_datetime(trades_seed["entry_date"]) >= start_ts) &
+            (pd.to_datetime(trades_seed["entry_date"]) <= end_ts)
+        ].copy()
+
+        if seed_window.empty:
+            st.info("No strategy entries (seed) inside the selected window — widen dates.")
+            st.stop()
+
+        if universe_mode == "All tickers":
+            universe_syms = sorted(seed_window["symbol"].unique().tolist())
+            st.caption(f"Universe: All symbols with entries in window ({len(universe_syms)} tickers).")
+        else:
+            if perf.empty:
+                st.warning("No historical performance available (no closed trades) to rank Top-N.")
+                st.stop()
+
+            perf_rank = (
+                perf.loc[perf["n_closed"] >= min_closed_for_rank]
+                    .dropna(subset=["avg_return"])
+                    .sort_values("avg_return", ascending=False)
+            )
+            if perf_rank.empty:
+                st.warning("No tickers meet the minimum closed-trade filter.")
+                st.stop()
+
+            syms_in_window = set(seed_window["symbol"].unique().tolist())
+            ranked_syms = [s for s in perf_rank["symbol"].tolist() if s in syms_in_window][:topN]
+            if not ranked_syms:
+                st.warning("Top-N ranked tickers have no entries in the selected window.")
+                st.stop()
+
+            # Show who we picked
+            st.caption("Selected Top-N (by historical avg return):")
+            preview = perf_rank.loc[perf_rank["symbol"].isin(ranked_syms),
+                                    ["symbol","avg_return","win_rate","n_closed"]].copy()
+            preview["avg_return"] = preview["avg_return"].map(lambda x: pct_str(x))
+            preview["win_rate"]   = preview["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
+            st.dataframe(add_rownum(preview).rename(columns={
+                "symbol":"Ticker","avg_return":"Avg return","win_rate":"Win rate",
+                "#":"#","n_closed":"Closed"
+            }), use_container_width=True, hide_index=True)
+
+            universe_syms = ranked_syms
+
+        # ---- 2) Price lookups once (for unrealized P/L)
         last_close_upto, latest_fallback = _build_last_close_dicts(end_ts)
 
-        # We already computed avg_win_map / avg_loss_map from the seed run above
+        # ---- 3) Grid search over Peak/Confirm/Min-hold (peak-giveback only)
         results = []
-        best_ledger = None
-
         grid_total = len(peak_choices) * len(confirm_choices) * len(min_hold_choices)
         prog = st.progress(0)
         step = 0
@@ -871,22 +924,31 @@ if page == "Optimizer":
                     step += 1
                     prog.progress(min(step / grid_total, 1.0))
 
-                    # Run the strategy with this combo (enhanced 2025+ only)
                     trades_combo = run_strategy(
-                    df, caps,
-                    avg_win_map=avg_win_map,
-                    avg_loss_map=avg_loss_map,
-                    enhanced_cutoff=cutoff_ts.strftime("%Y-%m-%d"),
-                    require_confirm_bars=int(confirm),
-                    min_hold_bars=int(min_hold),
-                    buffer_mult=float(buffer_mult),
-                    peak_giveback_pct=float(peak)
-                    )  
+                        df, caps,
+                        # maps from SEED run (already computed above)
+                        avg_win_map=avg_win_map,
+                        avg_loss_map=avg_loss_map,
+                        # Enhanced exits only for entries on/after cutoff
+                        enhanced_cutoff=cutoff_ts.strftime("%Y-%m-%d"),
+                        enhanced_guards_on=True,
+                        # We are using PEAK-GIVEBACK guard only:
+                        require_confirm_bars=int(confirm),
+                        min_hold_bars=int(min_hold),
+                        buffer_mult=float(buffer_mult),
+                        peak_giveback_pct=float(peak),
+                        maps_use_median=use_median_maps,
+                        # avg-win guard is OFF by passing no threshold param (or leave as implemented in strategy)
+                    )
 
                     if trades_combo.empty:
                         continue
 
-                    # Simulate one position at a time on entries in [start,end]
+                    # Filter to UNIVERSE and DATE WINDOW before sim
+                    trades_combo = trades_combo[trades_combo["symbol"].isin(universe_syms)].copy()
+                    if trades_combo.empty:
+                        continue
+
                     final_cap, ledger = simulate_one_position_at_a_time(
                         trades_combo, start_ts, end_ts, alloc_pct, last_close_upto, latest_fallback
                     )
@@ -913,17 +975,16 @@ if page == "Optimizer":
                         "Avg realized %": avg_real,
                         "Best %": best_real,
                         "Worst %": worst_real,
-                        "ledger": ledger  # keep to show for winner
+                        "ledger": ledger
                     })
 
         if not results:
-            st.info("No valid trades found for the selected grid / window.")
+            st.info("No valid trades found for the selected grid / window / universe.")
             st.stop()
 
-        # Rank by Final capital (desc)
+        # ---- 4) Show results
         res_df = pd.DataFrame(results).sort_values("Final capital", ascending=False).reset_index(drop=True)
 
-        # Show top results table (hide the ledger column)
         res_show = res_df.drop(columns=["ledger"]).copy()
         res_show["Final capital"]   = res_show["Final capital"].map(money_str)
         res_show["Total return %"]  = res_show["Total return %"].map(lambda x: pct_str(x))
@@ -933,13 +994,12 @@ if page == "Optimizer":
         st.subheader("🏆 Grid Results (sorted by Final capital)")
         st.dataframe(add_rownum(res_show), use_container_width=True, hide_index=True)
 
-        # Show the best combo’s ledger
         best = res_df.iloc[0]
         st.markdown(
-            f"**Best combo:** Peak={best['Peak %']}%, Confirm={best['Confirm']}, "
-            f"Min hold={best['Min hold']}  •  Final capital: {money_str(best['Final capital'])}  "
-            f"•  Total return: {pct_str(best['Total return %'])}  "
-            f"•  Win rate: {'—' if pd.isna(best['Win rate']) else f'{best['Win rate']:.0%}'}"
+            f"**Best combo:** Peak={best['Peak %']}%, Confirm={best['Confirm']}, Min hold={best['Min hold']}  "
+            f"• Final capital: {money_str(best['Final capital'])}  "
+            f"• Total return: {pct_str(best['Total return %'])}  "
+            f"• Win rate: {'—' if pd.isna(best['Win rate']) else f'{best['Win rate']:.0%}'}"
         )
 
         st.subheader("📜 Best Combo — Trade Ledger")
@@ -956,10 +1016,10 @@ if page == "Optimizer":
             })), use_container_width=True, hide_index=True)
 
         st.caption(
-            "Notes: Optimizer uses your enhanced-exit logic only for entries on/after the chosen cutoff. "
-            "All avg win/loss maps are computed from the seed run (all history). "
+            "Notes: Optimizer uses the peak-giveback enhanced exits only for entries on/after the chosen cutoff. "
+            "Top-N is ranked by historical avg return from closed trades (the 'Insights' perf table), "
+            "then intersected with symbols that actually have entries in your date window (based on the seed run). "
             "Simulation assumes one position at a time with compounding."
         )
     else:
         st.info("Pick your grid and click **Run optimization** to benchmark parameter combinations.")
-
