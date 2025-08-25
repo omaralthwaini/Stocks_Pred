@@ -89,140 +89,189 @@ if profit_mode == "Peak giveback":
 else:
     profit_trail_peak_dd = None
 
-# =============== Load & Run Strategy ===============
+# =============== Load & Run Strategy (on-demand) ===============
+@st.cache_data(show_spinner=False)
+def load_data():
+    df = pd.read_csv("stocks.csv", parse_dates=["date"])
+    caps = pd.read_csv("market_cap.csv")
+    return df.sort_values(["symbol", "date"]).copy(), caps.copy()
+
+@st.cache_data(show_spinner=False)
+def compute_trades_and_perf(
+    df, caps,
+    enhanced_cutoff:str = "2025-01-01",
+    enhanced_guards_on:bool = True,
+    require_confirm_bars:int = 3,
+    min_hold_bars:int = 3,
+    buffer_mult:float = 1.0,
+    peak_giveback_pct:float = 8.0,
+    maps_use_median:bool = True,
+):
+    """
+    Runs the seed + enhanced strategies, builds avg win/loss maps, and returns
+    fully-enriched trades + perf (so the UI doesn't recompute any of that).
+    """
+    # 1) Seed run (no guards) -> avg win/loss maps from all history
+    trades_seed = run_strategy(df, caps)
+    closed_seed = trades_seed[trades_seed["exit_date"].notna()].copy()
+    if not closed_seed.empty:
+        closed_seed["pct_return"] = (closed_seed["exit_price"] / closed_seed["entry"] - 1) * 100
+        avg_win_map  = (closed_seed.loc[closed_seed["pct_return"] > 0]
+                                   .groupby("symbol")["pct_return"].mean().to_dict())
+        avg_loss_map = (closed_seed.loc[closed_seed["pct_return"] < 0]
+                                   .groupby("symbol")["pct_return"].mean().to_dict())
+    else:
+        avg_win_map, avg_loss_map = {}, {}
+
+    # 2) Enhanced run (applies guards only for entries on/after `enhanced_cutoff`)
+    trades = run_strategy(
+        df, caps,
+        avg_win_map=avg_win_map,
+        avg_loss_map=avg_loss_map,
+        enhanced_cutoff=enhanced_cutoff,
+        enhanced_guards_on=enhanced_guards_on,
+        require_confirm_bars=require_confirm_bars,
+        min_hold_bars=min_hold_bars,
+        buffer_mult=buffer_mult,
+        peak_giveback_pct=peak_giveback_pct,
+        maps_use_median=maps_use_median,
+    )
+
+    # === Enrichment (do it once, cached) ===
+    # maps
+    sector_map     = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
+    cap_score_map  = caps.set_index("symbol")["cap_score"]
+    cap_emoji_map  = caps.set_index("symbol")["cap_emoji"]
+
+    # sector/caps
+    trades["sector"]     = trades["symbol"].map(sector_map)
+    trades["cap_score"]  = trades["symbol"].map(cap_score_map)
+    trades["cap_emoji"]  = trades["symbol"].map(cap_emoji_map)
+
+    # exclude cap 3 & 4
+    _cap = pd.to_numeric(trades["cap_score"], errors="coerce")
+    trades = trades[~_cap.isin([3, 4])].copy()
+
+    # latest closes
+    latest_prices = (
+        df.sort_values("date")
+          .groupby("symbol", as_index=False)
+          .agg(latest_close=("close", "last"), latest_date=("date", "max"))
+    )
+    trades = trades.merge(latest_prices, on="symbol", how="left")
+
+    # stop-loss (prior day low at entry)
+    df_tmp = df.copy()
+    df_tmp["stop_loss"] = df_tmp.groupby("symbol")["low"].shift(1)
+    entry_lows = df_tmp[["symbol", "date", "stop_loss"]].rename(columns={"date": "entry_date"})
+    trades = trades.merge(entry_lows, on=["symbol", "entry_date"], how="left")
+
+    # returns
+    trades["pct_return"]            = (trades["exit_price"] / trades["entry"] - 1) * 100
+    trades["unrealized_pct_return"] = (trades["latest_close"] / trades["entry"] - 1) * 100
+    trades["final_pct"] = trades.apply(
+        lambda r: r["pct_return"] if pd.notna(r["exit_price"]) else r["unrealized_pct_return"], axis=1
+    )
+
+    # display symbol
+    trades["symbol_display"] = trades.apply(
+        lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r["cap_emoji"]) else r["symbol"], axis=1
+    )
+
+    # min/max since entry for OPEN trades
+    open_mask = trades["outcome"] == 0
+    minmax = []
+    if open_mask.any():
+        for _, rr in trades[open_mask].iterrows():
+            sym, entry_date = rr["symbol"], rr["entry_date"]
+            sl = df[(df["symbol"] == sym) & (df["date"] >= entry_date)]
+            if not sl.empty:
+                minmax.append((sym, entry_date, sl["low"].min(), sl["high"].max()))
+    minmax_df = pd.DataFrame(minmax, columns=["symbol", "entry_date", "min_low", "max_high"]) if minmax else \
+                pd.DataFrame(columns=["symbol","entry_date","min_low","max_high"])
+    trades = trades.merge(minmax_df, on=["symbol", "entry_date"], how="left")
+
+    # performance table from CLOSED trades
+    closed = trades[trades["exit_date"].notna()].copy()
+    if not closed.empty:
+        closed["win"] = closed["pct_return"] > 0
+        closed["days_held"] = (closed["exit_date"] - closed["entry_date"]).dt.days
+        base = (
+            closed.groupby("symbol")
+                  .agg(
+                      win_rate=("win", "mean"),
+                      avg_return=("pct_return", "mean"),
+                      n_closed=("pct_return", "size"),
+                      avg_days=("days_held", "mean")
+                  )
+                  .reset_index()
+        )
+        win_mean  = (closed.loc[closed["pct_return"] > 0].groupby("symbol")["pct_return"].mean().rename("avg_win_return"))
+        loss_mean = (closed.loc[closed["pct_return"] < 0].groupby("symbol")["pct_return"].mean().rename("avg_loss_return"))
+        perf = base.merge(win_mean, on="symbol", how="left").merge(loss_mean, on="symbol", how="left")
+    else:
+        perf = pd.DataFrame(columns=[
+            "symbol","win_rate","avg_return","n_closed","avg_days","avg_win_return","avg_loss_return"
+        ])
+
+    return {
+        "trades_seed": trades_seed,
+        "trades": trades,
+        "perf": perf,
+        "avg_win_map": avg_win_map,
+        "avg_loss_map": avg_loss_map,
+    }
+
+# ---- Load data only once (cached) ----
 df, caps = load_data()
 
-# ---- 1) Seed run (no guards) -> build avg win/loss maps from *all* closed trades
-with st.spinner("⏳ Detecting trades (seed)…"):
-    trades_seed = run_strategy(df, caps)
+# ---- Sidebar: parameters that affect STRATEGY ONLY (don’t recompute until button) ----
+with st.sidebar.expander("Strategy run (compute on click)", expanded=True):
+    enhanced_on = st.checkbox("Use enhanced exits (2025+ only)", value=True)
+    cutoff_date = st.date_input("Enhanced exits from", pd.to_datetime("2025-01-01").date())
+    confirm_bars = st.selectbox("Confirm bars (1..3)", [1,2,3], index=2)
+    min_hold_bars = st.selectbox("Min hold bars (2..3)", [2,3], index=1)
+    buffer_mult = st.number_input("Buffer (×)", min_value=0.5, max_value=2.0, step=0.1, value=1.0)
+    peak_giveback = st.number_input("Peak giveback (%)", min_value=0.0, max_value=30.0, step=0.5, value=8.0)
+    use_median_maps = st.checkbox("Use median maps (robust)", value=True)
 
-# Build maps from seed closed trades
-closed_seed = trades_seed[trades_seed["exit_date"].notna()].copy()
-if not closed_seed.empty:
-    closed_seed["pct_return"] = (closed_seed["exit_price"] / closed_seed["entry"] - 1) * 100
-    avg_win_map  = (closed_seed.loc[closed_seed["pct_return"] > 0]
-                               .groupby("symbol")["pct_return"].mean().to_dict())
-    avg_loss_map = (closed_seed.loc[closed_seed["pct_return"] < 0]
-                               .groupby("symbol")["pct_return"].mean().to_dict())
-else:
-    avg_win_map, avg_loss_map = {}, {}
+    run_click = st.button("🔁 Run / Update strategy")
 
-# ---- 2) Main run (optionally enhanced for 2025+ using the maps & sidebar knobs)
-if use_enhanced:
-    with st.spinner("⏳ Detecting trades (enhanced 2025+ guards)…"):
-        trades = run_strategy(
+# ---- Run only when user clicks the button ----
+if run_click or ("trades" not in st.session_state):
+    with st.spinner("⏳ Computing strategy…"):
+        res = compute_trades_and_perf(
             df, caps,
-            avg_win_map=avg_win_map,
-            avg_loss_map=avg_loss_map,
-            enhanced_cutoff=str(pd.Timestamp(cutoff_date_ui).date()),  # "YYYY-MM-DD"
-            guard_buffer_pp=float(guard_buffer_pp),
-            guard_confirm_bars=int(guard_confirm_bars),
+            enhanced_cutoff=str(pd.Timestamp(cutoff_date).date()),
+            enhanced_guards_on=enhanced_on,
+            require_confirm_bars=int(confirm_bars),
             min_hold_bars=int(min_hold_bars),
-            # Pass giveback % only when using Peak giveback mode; otherwise None = disabled
-            profit_trail_peak_dd=float(profit_trail_peak_dd) if profit_trail_peak_dd is not None else None,
+            buffer_mult=float(buffer_mult),
+            peak_giveback_pct=float(peak_giveback),
+            maps_use_median=bool(use_median_maps),
         )
-else:
-    with st.spinner("⏳ Detecting trades…"):
-        trades = run_strategy(df, caps)
+    st.session_state.update(res)
+    st.success(f"✅ Computed {len(st.session_state['trades'])} trades.")
 
-if trades.empty:
-    st.warning("⚠️ No trades found.")
+# If still nothing computed, stop here (avoids downstream errors)
+if "trades" not in st.session_state:
+    st.info("Set parameters and click **Run / Update strategy** in the sidebar.")
     st.stop()
-else:
-    st.success(f"✅ {len(trades)} trades detected.")
 
+# Use the precomputed results everywhere else in the app
+trades        = st.session_state["trades"]
+trades_seed   = st.session_state["trades_seed"]
+perf          = st.session_state["perf"]
+avg_win_map   = st.session_state["avg_win_map"]
+avg_loss_map  = st.session_state["avg_loss_map"]
 
-# ---- Sector / Cap maps
-sector_map     = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
-cap_score_map  = caps.set_index("symbol")["cap_score"]
-cap_emoji_map  = caps.set_index("symbol")["cap_emoji"]
-
-trades["sector"]     = trades["symbol"].map(sector_map)
-trades["cap_score"]  = trades["symbol"].map(cap_score_map)
-trades["cap_emoji"]  = trades["symbol"].map(cap_emoji_map)
-
-# Exclude cap 3 & 4
-_cap = pd.to_numeric(trades["cap_score"], errors="coerce")
-trades = trades[~_cap.isin([3, 4])].copy()
-
-# ---- Latest close per symbol
-latest_prices = (
-    df.sort_values("date")
-      .groupby("symbol", as_index=False)
-      .agg(latest_close=("close", "last"), latest_date=("date", "max"))
-)
-trades = trades.merge(latest_prices, on="symbol", how="left")
-
-# ---- Stop-loss reference (prior day low at entry)
-df["stop_loss"] = df.groupby("symbol")["low"].shift(1)
-entry_lows = df[["symbol", "date", "stop_loss"]].rename(columns={"date": "entry_date"})
-trades = trades.merge(entry_lows, on=["symbol", "entry_date"], how="left")
-
-# ---- Returns
-trades["pct_return"]            = (trades["exit_price"] / trades["entry"] - 1) * 100
-trades["unrealized_pct_return"] = (trades["latest_close"] / trades["entry"] - 1) * 100
-trades["final_pct"] = trades.apply(
-    lambda r: r["pct_return"] if pd.notna(r["exit_price"]) else r["unrealized_pct_return"],
-    axis=1
-)
-
-# ---- Emoji symbol display
-trades["symbol_display"] = trades.apply(
-    lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r["cap_emoji"]) else r["symbol"],
-    axis=1
-)
-
-# ---- Min/Max since entry for OPEN trades
-open_mask = trades["outcome"] == 0
-minmax = []
-if open_mask.any():
-    for _, r in trades[open_mask].iterrows():
-        sym, entry_date = r["symbol"], r["entry_date"]
-        sl = df[(df["symbol"] == sym) & (df["date"] >= entry_date)]
-        if not sl.empty:
-            minmax.append((sym, entry_date, sl["low"].min(), sl["high"].max()))
-minmax_df = (
-    pd.DataFrame(minmax, columns=["symbol", "entry_date", "min_low", "max_high"])
-    if minmax else pd.DataFrame(columns=["symbol","entry_date","min_low","max_high"])
-)
-trades = trades.merge(minmax_df, on=["symbol", "entry_date"], how="left")
-
-# ---- CLOSED-only historical stats per ticker
-closed = trades[trades["exit_date"].notna()].copy()
-if not closed.empty:
-    closed["win"] = closed["pct_return"] > 0
-    closed["days_held"] = (closed["exit_date"] - closed["entry_date"]).dt.days
-
-    base = (
-        closed.groupby("symbol")
-              .agg(
-                  win_rate=("win", "mean"),       # 0..1
-                  avg_return=("pct_return", "mean"),
-                  n_closed=("pct_return", "size"),
-                  avg_days=("days_held", "mean")
-              )
-              .reset_index()
-    )
-    win_mean  = (closed.loc[closed["pct_return"] > 0]
-                        .groupby("symbol")["pct_return"]
-                        .mean().rename("avg_win_return"))
-    loss_mean = (closed.loc[closed["pct_return"] < 0]
-                        .groupby("symbol")["pct_return"]
-                        .mean().rename("avg_loss_return"))
-    perf = base.merge(win_mean, on="symbol", how="left").merge(loss_mean, on="symbol", how="left")
-else:
-    perf = pd.DataFrame(columns=[
-        "symbol","win_rate","avg_return","n_closed","avg_days",
-        "avg_win_return","avg_loss_return"
-    ])
-
-# Quick maps for lookups
-win_rate_map      = perf.set_index("symbol")["win_rate"].to_dict()          # 0..1
-avg_return_map    = perf.set_index("symbol")["avg_return"].to_dict()        # %
-avg_win_ret_map   = perf.set_index("symbol")["avg_win_return"].to_dict()    # %
-avg_loss_ret_map  = perf.set_index("symbol")["avg_loss_return"].to_dict()   # %
-n_closed_map      = perf.set_index("symbol")["n_closed"].to_dict()
-avg_days_map      = perf.set_index("symbol")["avg_days"].to_dict()
+# Quick maps for lookups (from precomputed `perf`)
+win_rate_map      = perf.set_index("symbol")["win_rate"].to_dict() if not perf.empty else {}
+avg_return_map    = perf.set_index("symbol")["avg_return"].to_dict() if not perf.empty else {}
+avg_win_ret_map   = perf.set_index("symbol")["avg_win_return"].to_dict() if not perf.empty else {}
+avg_loss_ret_map  = perf.set_index("symbol")["avg_loss_return"].to_dict() if not perf.empty else {}
+n_closed_map      = perf.set_index("symbol")["n_closed"].to_dict() if not perf.empty else {}
+avg_days_map      = perf.set_index("symbol")["avg_days"].to_dict() if not perf.empty else {}
 
 # =========================================
 #                 HOME (Open trades)
