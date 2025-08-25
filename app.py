@@ -873,18 +873,15 @@ if page == "Optimizer":
 
                     # Run the strategy with this combo (enhanced 2025+ only)
                     trades_combo = run_strategy(
-                        df, caps,
-                        avg_win_map=avg_win_map,
-                        avg_loss_map=avg_loss_map,
-                        enhanced_cutoff=cutoff_ts.strftime("%Y-%m-%d"),
-                        enhanced_guards_on=True,
-                        require_confirm_bars=int(confirm),
-                        min_hold_bars=int(min_hold),
-                        buffer_mult=float(buffer_mult),
-                        peak_giveback_pct=float(peak),
-                        maps_use_median=use_median_maps
-                        #maps_min_samples=min_samples_for_map,
-                    )
+                    df, caps,
+                    avg_win_map=avg_win_map,
+                    avg_loss_map=avg_loss_map,
+                    enhanced_cutoff=cutoff_ts.strftime("%Y-%m-%d"),
+                    require_confirm_bars=int(confirm),
+                    min_hold_bars=int(min_hold),
+                    buffer_mult=float(buffer_mult),
+                    peak_giveback_pct=float(peak)
+                    )  
 
                     if trades_combo.empty:
                         continue
