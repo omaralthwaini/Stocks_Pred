@@ -38,7 +38,7 @@ def load_data():
     top_symbols = (
         caps[~caps["cap_score"].isin([3, 4])]
         .sort_values("cap_score")  # lower = higher priority, if that's how your scoring works
-        .head(100)["symbol"]
+        .head(25)["symbol"]
         .tolist()
     )
 
