@@ -179,25 +179,62 @@ if page == "Insights":
             "avg_days_str": "Avg Days"
         }), use_container_width=True, hide_index=True)
 
+        st.subheader("📦 All Trades (Open + Closed)")
+        all_trades = trades.copy().sort_values("entry_date", ascending=False)
+        all_trades = date_only_cols(all_trades, ["entry_date", "exit_date"])
+
+        display = all_trades[[
+        "symbol_display", "sector", "entry_date", "exit_date",
+        "entry", "exit_price", "final_pct", "stop_loss", "min_low", "max_high"
+        ]].copy()
+
+        display["entry"] = display["entry"].map(money_str)
+        display["exit_price"] = display["exit_price"].map(money_str)
+        display["final_pct"] = display["final_pct"].map(lambda x: pct_str(x))
+
+        st.dataframe(add_rownum(display), use_container_width=True, hide_index=True)
+
+        st.download_button(
+        label="📥 Download All Trades",
+        data=display.to_csv(index=False).encode("utf-8"),
+        file_name="all_trades.csv",
+        mime="text/csv"
+        )
+
 # ---------- TESTER ----------
 if page == "Tester":
     st.subheader("🧪 One-Position-At-A-Time Backtest")
 
     start_date = st.sidebar.date_input("Start date", value=trades["entry_date"].min().date())
     end_date = st.sidebar.date_input("End date", value=trades["entry_date"].max().date())
+    start_ts, end_ts = pd.Timestamp(start_date), pd.Timestamp(end_date)
+
+    # ✅ NEW: optional ticker filter based on tickers within selected window
+    tickers_in_window = trades[
+        (trades["entry_date"] >= start_ts) &
+        (trades["entry_date"] <= end_ts)
+    ]["symbol"].unique().tolist()
+
+    selected_tickers = st.sidebar.multiselect(
+        "Optional ticker filter (within window)", options=sorted(tickers_in_window),
+        default=tickers_in_window
+    )
 
     starting_capital = st.sidebar.number_input("Starting Capital ($)", min_value=1000.0, step=100.0, value=10000.0)
     alloc_pct = st.sidebar.number_input("Allocation per trade (%)", min_value=1.0, max_value=100.0, step=1.0, value=100.0)
 
-    start_ts, end_ts = pd.Timestamp(start_date), pd.Timestamp(end_date)
-    candidates = trades[(trades["entry_date"] >= start_ts) & (trades["entry_date"] <= end_ts)].copy()
-    candidates = candidates.sort_values("entry_date")
+    # ✅ Apply filter BEFORE sim
+    candidates = trades[
+        (trades["entry_date"] >= start_ts) &
+        (trades["entry_date"] <= end_ts) &
+        (trades["symbol"].isin(selected_tickers))
+    ].copy().sort_values("entry_date")
 
     if candidates.empty:
-        st.info("No trades in window.")
+        st.info("No trades match the selected window and tickers.")
         st.stop()
 
-    # Simulation logic
+    # Simulation
     capital = float(starting_capital)
     available_from = start_ts
     ledger = []
@@ -240,8 +277,26 @@ if page == "Tester":
         })
 
     res = pd.DataFrame(ledger).sort_values("entry_date").reset_index(drop=True)
-    st.metric("Final capital", money_str(capital))
-    st.metric("Total return", pct_str((capital / starting_capital - 1.0) * 100.0))
+
+    # ✅ Summary KPIs + Enhanced Callouts
+    n_trades = len(res)
+    n_real = (res["status"] == "Realized").sum()
+    win_rate = (res.loc[res["status"] == "Realized", "ret_pct"] > 0).mean() if n_real else float("nan")
+    avg_win_ret = res.loc[(res["status"] == "Realized") & (res["ret_pct"] > 0), "ret_pct"].mean()
+    max_win = res["ret_pct"].max()
+    max_loss = res["ret_pct"].min()
+    total_ret = (capital / starting_capital - 1.0) * 100.0
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Final capital", money_str(capital))
+    c2.metric("Total return", pct_str(total_ret))
+    c3.metric("Trades taken", f"{n_trades}")
+
+    c4, c5, c6, c7 = st.columns(4)
+    c4.metric("Max Win %", pct_str(max_win))
+    c5.metric("Max Loss %", pct_str(max_loss))
+    c6.metric("Avg Win %", pct_str(avg_win_ret))
+    c7.metric("Win Rate", "—" if pd.isna(win_rate) else f"{win_rate:.0%}")
 
     res["ret_pct"] = res["ret_pct"].map(lambda x: pct_str(x))
     res["entry"] = res["entry"].map(money_str)
