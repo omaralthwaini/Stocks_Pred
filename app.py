@@ -33,7 +33,21 @@ def date_only_cols(df_in, cols=("entry_date","exit_date")):
 def load_data():
     df = pd.read_csv("stocks.csv", parse_dates=["date"])
     caps = pd.read_csv("market_cap.csv")
+    
+    # Sort caps by descending cap_score (you may adjust this based on your actual scoring logic)
+    top_symbols = (
+        caps[~caps["cap_score"].isin([3, 4])]
+        .sort_values("cap_score")  # lower = higher priority, if that's how your scoring works
+        .head(100)["symbol"]
+        .tolist()
+    )
+
+    # Filter df to keep only those top 100
+    df = df[df["symbol"].isin(top_symbols)].copy()
+    caps = caps[caps["symbol"].isin(top_symbols)].copy()
+    
     return df.sort_values(["symbol", "date"]), caps
+
 
 # ---------- Sidebar ----------
 st.sidebar.header("Navigation")
