@@ -27,7 +27,7 @@ def run_strategy(
     caps=None,
     k_days_rising=3,
     eps=1e-6,
-    body_min=0.00,
+    body_min=0.003,
     *,
     # maps from your seed run (can be empty)
     avg_win_map=None,        # {"AAPL": 7.2, ...}  (percent)
