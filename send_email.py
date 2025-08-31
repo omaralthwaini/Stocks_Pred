@@ -11,8 +11,11 @@ from strategy import run_strategy
 def fmt_money(x):
     return f"${x:,.2f}" if pd.notna(x) else "—"
 
-def fmt_pct(x):
-    return f"{x:+.2f}%" if pd.notna(x) else "—"
+def fmt_pct_signed(x, digits=2):
+    return f"{x:+.{digits}f}%" if pd.notna(x) else "—"
+
+def fmt_pct_plain(x, digits=0):
+    return f"{x:.{digits}f}%" if pd.notna(x) else "—"
 
 def df_to_html_table(df, columns, headers=None):
     headers = headers or columns
@@ -41,11 +44,20 @@ def df_to_html_table(df, columns, headers=None):
         tds = []
         for c in columns:
             val = r[c]
+            # Money columns
             if c in {"entry", "exit_price", "target_price"}:
                 cell = fmt_money(val)
-            elif c in {"ret_pct"}:
-                cls = "pos" if val and val > 0 else "neg" if val and val < 0 else "muted"
-                cell = f'<span class="{cls}">{fmt_pct(val)}</span>'
+            # Return columns: realized exit return (ret_pct) OR historical avg_return
+            elif c in {"ret_pct", "avg_return"}:
+                if pd.isna(val):
+                    cell = '<span class="muted">—</span>'
+                else:
+                    cls = "pos" if val > 0 else "neg" if val < 0 else "muted"
+                    cell = f'<span class="{cls}">{fmt_pct_signed(val)}</span>'
+            # Win rate (0..1 → %)
+            elif c == "win_rate":
+                cell = fmt_pct_plain(val * 100 if pd.notna(val) else val, 0)
+            # Dates and other text
             else:
                 cell = str(val) if pd.notna(val) else "—"
             tds.append(f"<td>{cell}</td>")
@@ -87,22 +99,41 @@ sector_map   = df[["symbol","sector"]].drop_duplicates().set_index("symbol")["se
 cap_score    = caps.set_index("symbol")["cap_score"]
 cap_emoji    = caps.set_index("symbol")["cap_emoji"]
 
-trades["sector"]     = trades["symbol"].map(sector_map)
-trades["cap_score"]  = trades["symbol"].map(cap_score)
-trades["cap_emoji"]  = trades["symbol"].map(cap_emoji)
-trades["symbol_disp"]= trades.apply(lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r.get("cap_emoji")) else r["symbol"], axis=1)
+trades["sector"]      = trades["symbol"].map(sector_map)
+trades["cap_score"]   = trades["symbol"].map(cap_score)
+trades["cap_emoji"]   = trades["symbol"].map(cap_emoji)
+trades["symbol_disp"] = trades.apply(
+    lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r.get("cap_emoji")) else r["symbol"], axis=1
+)
 
-# Latest close to show current snapshot (not used for exit P/L)
+# Latest close snapshot (not used for exit P/L)
 latest = (df.sort_values("date")
             .groupby("symbol")
             .agg(latest_close=("close","last")))
 trades = trades.merge(latest, on="symbol", how="left")
 
+# Compute pct_return for ALL closed trades (needed for per-ticker history)
+trades["pct_return"] = (trades["exit_price"] / trades["entry"] - 1) * 100
+
+# Per-ticker performance from CLOSED trades
+closed = trades[trades["exit_date"].notna()].copy()
+if not closed.empty:
+    perf = (closed.assign(win=lambda d: d["pct_return"] > 0)
+                  .groupby("symbol")
+                  .agg(win_rate=("win","mean"),           # 0..1
+                       avg_return=("pct_return","mean"))   # %
+                  .reset_index())
+else:
+    perf = pd.DataFrame(columns=["symbol","win_rate","avg_return"])
+
+win_rate_map   = perf.set_index("symbol")["win_rate"].to_dict()
+avg_return_map = perf.set_index("symbol")["avg_return"].to_dict()
+
 # Today slices
 today_entries = trades.loc[trades["entry_date"] == trading_day].copy()
 today_exits   = trades.loc[trades["exit_date"]  == trading_day].copy()
 
-# Compute exit P/L for today exits
+# Compute exit P/L for today exits only (already have pct_return overall, but keep ret_pct name for table)
 if not today_exits.empty:
     today_exits["ret_pct"] = ((today_exits["exit_price"] / today_exits["entry"]) - 1) * 100
 
@@ -113,19 +144,24 @@ lines.append(f"Daily Trade Summary — {trading_day} (US/Eastern)\n")
 # KPI line
 kpi_entries = len(today_entries)
 kpi_exits   = len(today_exits)
-win_rate    = f"{(today_exits['ret_pct'] > 0).mean():.0%}" if kpi_exits else "—"
-avg_ret     = f"{today_exits['ret_pct'].mean():+.2f}%" if kpi_exits else "—"
-lines.append(f"New entries: {kpi_entries} | Exits: {kpi_exits} | Win rate: {win_rate} | Avg exit return: {avg_ret}\n")
+win_rate_day = f"{(today_exits['ret_pct'] > 0).mean():.0%}" if kpi_exits else "—"
+avg_ret_day  = f"{today_exits['ret_pct'].mean():+.2f}%" if kpi_exits else "—"
+lines.append(f"New entries: {kpi_entries} | Exits: {kpi_exits} | Win rate: {win_rate_day} | Avg exit return: {avg_ret_day}\n")
 
-# New entries
+# New entries (now with historical WR/Avg per ticker)
 if kpi_entries:
     lines.append("NEW ENTRIES:")
     for _, r in today_entries.sort_values(["cap_score","symbol"]).iterrows():
         target = r["entry"] * 1.05 if pd.notna(r["entry"]) else None
+        wr  = win_rate_map.get(r["symbol"])
+        ar  = avg_return_map.get(r["symbol"])
+        wrt = fmt_pct_plain(wr*100, 0) if wr is not None else "—"
+        art = fmt_pct_signed(ar, 2)    if ar is not None else "—"
         lines.append(
             f"- {r['symbol']} ({r.get('sector','—')}) "
             f"Entry {r['entry_date']} @ {fmt_money(r['entry'])}"
             + (f" | 5% target: {fmt_money(target)}" if target else "")
+            + f" | Hist: WR {wrt}, Avg {art}"
         )
 else:
     lines.append("No new entries today.")
@@ -140,7 +176,7 @@ if kpi_exits:
             f"- {r['symbol']} ({r.get('sector','—')}) "
             f"Entry {r['entry_date']} @ {fmt_money(r['entry'])} → "
             f"Exit {r['exit_date']} @ {fmt_money(r['exit_price'])} "
-            f"({reason}) | Return {fmt_pct(r['ret_pct'])}"
+            f"({reason}) | Return {fmt_pct_signed(r['ret_pct'])}"
         )
 else:
     lines.append("No exits today.")
@@ -154,8 +190,8 @@ header = f"""
   <div class="kpis">
     <div class="chip"><strong>New entries:</strong> {kpi_entries}</div>
     <div class="chip"><strong>Exits:</strong> {kpi_exits}</div>
-    <div class="chip"><strong>Win rate:</strong> {win_rate}</div>
-    <div class="chip"><strong>Avg exit return:</strong> {avg_ret}</div>
+    <div class="chip"><strong>Win rate:</strong> {win_rate_day}</div>
+    <div class="chip"><strong>Avg exit return:</strong> {avg_ret_day}</div>
   </div>
 """
 
@@ -163,16 +199,22 @@ entries_html = ""
 if kpi_entries:
     df_entries = today_entries.sort_values(["cap_score","symbol"]).copy()
     df_entries["target_price"] = (df_entries["entry"] * 1.05).round(2)
-    df_entries["cap"] = df_entries.apply(lambda r: f"{r['cap_emoji']} {int(r['cap_score'])}" if pd.notna(r.get("cap_score")) else "—", axis=1)
-
-    cols = ["symbol_disp","sector","cap","entry","target_price"]
-    headers = ["Symbol","Sector","Cap","Entry","Target (+5%)"]
+    df_entries["cap"] = df_entries.apply(
+        lambda r: f"{r['cap_emoji']} {int(r['cap_score'])}" if pd.notna(r.get("cap_score")) else "—", axis=1
+    )
+    # attach per-ticker history
+    df_entries["win_rate"]   = df_entries["symbol"].map(win_rate_map)      # 0..1
+    df_entries["avg_return"] = df_entries["symbol"].map(avg_return_map)    # %
+    cols = ["symbol_disp","sector","cap","entry","target_price","win_rate","avg_return"]
+    headers = ["Symbol","Sector","Cap","Entry","Target (+5%)","Win rate","Avg return"]
     entries_html = f"<h3>New Entries ({kpi_entries})</h3>" + df_to_html_table(df_entries, cols, headers)
 
 exits_html = ""
 if kpi_exits:
     df_exits = today_exits.sort_values("ret_pct", ascending=False).copy()
-    df_exits["reason_print"] = df_exits["exit_reason"].map({"sma_below_2":"SMA Cross"}).fillna(df_exits["exit_reason"].astype(str).str.title())
+    df_exits["reason_print"] = df_exits["exit_reason"].map({"sma_below_2":"SMA Cross"}).fillna(
+        df_exits["exit_reason"].astype(str).str.title()
+    )
     cols = ["symbol_disp","sector","entry_date","exit_date","entry","exit_price","ret_pct","reason_print"]
     headers = ["Symbol","Sector","Entry Date","Exit Date","Entry","Exit","Return","Reason"]
     exits_html = f"<h3>Exits ({kpi_exits})</h3>" + df_to_html_table(df_exits, cols, headers)
