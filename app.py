@@ -66,6 +66,86 @@ def garch_volatility_forecast(series: pd.Series) -> float | None:
         return ann_vol if np.isfinite(ann_vol) and ann_vol > 0 else None
     except Exception:
         return None
+    
+# --- OAAT simulator that accepts a GARCH hard filter threshold ---
+def simulate_oaat(
+    trades_in: pd.DataFrame,
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+    starting_capital: float = 10000.0,
+    alloc_pct: float = 100.0,
+    *,
+    threshold: float = 0.50,       # hard filter: keep only trades with garch_risk_index >= threshold
+    require_garch: bool = True     # if True, drop NaN risk; if False, treat NaN as 1.0
+):
+    t = trades_in.copy().sort_values("entry_date")
+    if require_garch:
+        t = t[t["garch_risk_index"].notna()]
+    # hard filter by threshold
+    t = t[t["garch_risk_index"].ge(threshold)]
+
+    capital = float(starting_capital)
+    available_from = start_ts
+    taken = []
+
+    for _, r in t.iterrows():
+        entry_d = pd.to_datetime(r["entry_date"])
+        if entry_d < available_from:
+            continue
+
+        entry = float(r["entry"])
+        ex_d  = pd.to_datetime(r["exit_date"]) if pd.notna(r["exit_date"]) else pd.NaT
+        realized = pd.notna(ex_d) and (ex_d <= end_ts)
+
+        if realized:
+            exit_px = float(r["exit_price"])
+            ret_pct = (exit_px / entry - 1.0) * 100.0
+            available_from = ex_d + pd.Timedelta(days=1)
+            exit_date = ex_d
+            status = "Realized"
+        else:
+            exit_px = float(r["latest_close"])
+            ret_pct = (exit_px / entry - 1.0) * 100.0
+            available_from = end_ts + pd.Timedelta(days=1)
+            exit_date = pd.NaT
+            status = "Unrealized"
+
+        invest_amt = capital * (alloc_pct / 100.0)
+        capital = capital - invest_amt + invest_amt * (1.0 + ret_pct / 100.0)
+
+        taken.append({
+            "symbol": r["symbol"],
+            "entry_date": entry_d,
+            "exit_date": exit_date,
+            "entry": entry,
+            "exit_or_last": exit_px,
+            "ret_pct": ret_pct,
+            "status": status,
+            "capital_after": capital
+        })
+
+    res = pd.DataFrame(taken).sort_values("entry_date").reset_index(drop=True)
+
+    # KPIs
+    n_trades = len(res)
+    n_real = (res["status"] == "Realized").sum()
+    win_rate = (res.loc[res["status"] == "Realized", "ret_pct"] > 0).mean() if n_real else float("nan")
+    avg_win_ret = res.loc[(res["status"] == "Realized") & (res["ret_pct"] > 0), "ret_pct"].mean()
+    max_win = res["ret_pct"].max() if n_trades else float("nan")
+    max_loss = res["ret_pct"].min() if n_trades else float("nan")
+
+    total_ret = (capital / starting_capital - 1.0) * 100.0
+    metrics = dict(
+        final_capital=capital,
+        total_return=total_ret,
+        trades=n_trades,
+        win_rate=win_rate,
+        avg_win_ret=avg_win_ret,
+        max_win=max_win,
+        max_loss=max_loss,
+    )
+    return metrics, res
+
 
 @st.cache_data(show_spinner=False)
 def attach_garch_risk_index(df_prices: pd.DataFrame,
@@ -104,7 +184,7 @@ def attach_garch_risk_index(df_prices: pd.DataFrame,
 
 # ---------- Sidebar ----------
 st.sidebar.header("Navigation")
-page = st.sidebar.radio("Choose page", ["Home", "Insights", "Tester"], index=0)
+page = st.sidebar.radio("Choose page", ["Home", "Insights", "Tester", "Compare"], index=0)
 near_band_pp = st.sidebar.number_input("Zone band (± %)", min_value=0.1, max_value=10.0, step=0.1, value=1.0)
 
 # GARCH filter threshold (default 0.50 as requested)
@@ -411,3 +491,111 @@ if page == "Tester":
     res = date_only_cols(res, ["entry_date","exit_date"])
 
     st.dataframe(add_rownum(res), use_container_width=True, hide_index=True)
+
+# ---------- COMPARE ----------
+if page == "Compare":
+    st.subheader("🆚 GARCH Threshold A/B Compare")
+
+    # Recompute raw trades (unfiltered) and attach GARCH once (cached)
+    with st.spinner("⏳ Preparing trades and GARCH index..."):
+        trades_raw = run_strategy(df)
+        if trades_raw.empty:
+            st.info("No trades detected.")
+            st.stop()
+        trades_all = attach_garch_risk_index(df, trades_raw, base_vol_dec=0.20, lookback=252)
+
+        # enrich with latest prices (like elsewhere)
+        latest_prices = df.groupby("symbol", as_index=False).agg(latest_close=("close", "last"))
+        trades_all = trades_all.merge(latest_prices, on="symbol", how="left")
+
+    # Time window & ticker filter
+    start_date = st.sidebar.date_input("Start date", value=trades_all["entry_date"].min().date())
+    end_date = st.sidebar.date_input("End date", value=trades_all["entry_date"].max().date())
+    start_ts, end_ts = pd.Timestamp(start_date), pd.Timestamp(end_date)
+
+    tickers_in_window = trades_all[
+        (trades_all["entry_date"] >= start_ts) &
+        (trades_all["entry_date"] <= end_ts)
+    ]["symbol"].unique().tolist()
+    selected_tickers = st.sidebar.multiselect(
+        "Tickers (within window)", options=sorted(tickers_in_window), default=tickers_in_window
+    )
+
+    starting_capital = st.sidebar.number_input("Starting Capital ($)", min_value=1000.0, step=100.0, value=10000.0)
+    alloc_pct = st.sidebar.number_input("Allocation per trade (%)", min_value=1.0, max_value=100.0, step=1.0, value=100.0)
+
+    # Thresholds to compare
+    cA, cB = st.columns(2)
+    thrA = cA.number_input("Threshold A", min_value=0.0, max_value=1.0, step=0.05, value=0.00)
+    thrB = cB.number_input("Threshold B", min_value=0.0, max_value=1.0, step=0.05, value=0.50)
+
+    # Candidate trades (only from selected tickers and window)
+    candidates = trades_all[
+        (trades_all["entry_date"] >= start_ts) &
+        (trades_all["entry_date"] <= end_ts) &
+        (trades_all["symbol"].isin(selected_tickers))
+    ].copy()
+
+    if candidates.empty:
+        st.info("No trades match the selected window and tickers.")
+        st.stop()
+
+    # Simulate A and B
+    metricsA, resA = simulate_oaat(
+        candidates, start_ts, end_ts,
+        starting_capital=starting_capital, alloc_pct=alloc_pct,
+        threshold=thrA, require_garch=True
+    )
+    metricsB, resB = simulate_oaat(
+        candidates, start_ts, end_ts,
+        starting_capital=starting_capital, alloc_pct=alloc_pct,
+        threshold=thrB, require_garch=True
+    )
+
+    # KPIs side-by-side
+    st.write("### Results")
+    colA, colB, colΔ = st.columns(3)
+    colA.metric("Final capital (A)", money_str(metricsA["final_capital"]))
+    colB.metric("Final capital (B)", money_str(metricsB["final_capital"]),
+                delta=pct_str((metricsB["final_capital"]/metricsA["final_capital"]-1)*100))
+    colΔ.metric("Δ Total return (B−A)", pct_str(metricsB["total_return"]-metricsA["total_return"]))
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total return A", pct_str(metricsA["total_return"]))
+    c2.metric("Total return B", pct_str(metricsB["total_return"]))
+    c3.metric("Δ trades (B−A)", f"{metricsB['trades']-metricsA['trades']}")
+
+    c4, c5, c6 = st.columns(3)
+    c4.metric("Win Rate A", "—" if pd.isna(metricsA["win_rate"]) else f"{metricsA['win_rate']:.0%}")
+    c5.metric("Win Rate B", "—" if pd.isna(metricsB["win_rate"]) else f"{metricsB['win_rate']:.0%}")
+    c6.metric("Δ Win Rate", "—" if (pd.isna(metricsA['win_rate']) or pd.isna(metricsB['win_rate']))
+              else f"{(metricsB['win_rate']-metricsA['win_rate']):.0%}")
+
+    # Optional: show taken trades for each
+    with st.expander("Show taken trades (A)"):
+        tmp = resA.copy()
+        tmp["ret_pct"] = tmp["ret_pct"].map(lambda x: f"{x:+.2f}%")
+        tmp = date_only_cols(tmp, ["entry_date","exit_date"])
+        st.dataframe(add_rownum(tmp), use_container_width=True, hide_index=True)
+
+    with st.expander("Show taken trades (B)"):
+        tmp = resB.copy()
+        tmp["ret_pct"] = tmp["ret_pct"].map(lambda x: f"{x:+.2f}%")
+        tmp = date_only_cols(tmp, ["entry_date","exit_date"])
+        st.dataframe(add_rownum(tmp), use_container_width=True, hide_index=True)
+
+    # Threshold sweep (quick grid search)
+    st.write("### Threshold sweep")
+    step = st.slider("Step", 0.01, 0.25, 0.05, 0.01)
+    thr_values = np.round(np.arange(0.0, 1.0 + 1e-9, step), 2)
+    rows = []
+    for thr in thr_values:
+        m, _ = simulate_oaat(
+            candidates, start_ts, end_ts,
+            starting_capital=starting_capital, alloc_pct=alloc_pct,
+            threshold=thr, require_garch=True
+        )
+        rows.append({"threshold": thr, "trades": m["trades"], "total_return_%": m["total_return"],
+                     "win_rate_%": (m["win_rate"]*100 if pd.notna(m["win_rate"]) else np.nan)})
+    sweep_df = pd.DataFrame(rows)
+    st.dataframe(add_rownum(sweep_df), use_container_width=True, hide_index=True)
