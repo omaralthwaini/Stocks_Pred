@@ -317,13 +317,28 @@ def optimize_thresholds_per_symbol_closed(
 # Data loading + DAILY UPDATE (stocks + crypto)
 # --------------------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False)
 def load_raw_prices() -> pd.DataFrame:
     df = pd.read_csv("stocks.csv", parse_dates=["date"])
+
+    # Ensure asset_type exists (default everything to 'stock' if missing)
     if "asset_type" not in df.columns:
         df["asset_type"] = "stock"
-    # backfill crypto sector if missing
-    df.loc[(df["asset_type"] == "crypto") & (~df.columns.isin(["sector"]) or df["sector"].isna()), "sector"] = "Crypto"
+
+    # Ensure sector column exists
+    if "sector" not in df.columns:
+        df["sector"] = None
+
+    # Normalize asset_type and fill sector for crypto rows only
+    df["asset_type"] = df["asset_type"].astype(str).str.lower()
+    mask_crypto = df["asset_type"].eq("crypto")
+
+    # Make sure 'sector' is string-capable, then fill NA/blank for crypto rows
+    df["sector"] = df["sector"].astype("object")
+    df.loc[mask_crypto & (df["sector"].isna() | (df["sector"].astype(str).str.strip() == "")), "sector"] = "Crypto"
+
     return df
+
 
 def _yesterday_utc_date() -> pd.Timestamp:
     return (datetime.now(timezone.utc) - timedelta(days=1)).date()
