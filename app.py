@@ -1,18 +1,30 @@
 # app.py
-import streamlit as st
-import pandas as pd
-import numpy as np
-from strategy import run_strategy
-from arch import arch_model  # for GARCH
+import os
+import time
+from datetime import datetime, timedelta, timezone
 
+import numpy as np
+import pandas as pd
+import streamlit as st
+from arch import arch_model  # for GARCH
+from strategy import run_strategy
+
+# --------------------------------------------------------------------------------------
+# App config
+# --------------------------------------------------------------------------------------
 st.set_page_config(page_title="Smart Backtester", layout="wide")
 st.title("📈 Smart Backtester")
 
-# === Auto threshold settings (global, always on) ===
+# Auto threshold settings (global, always on)
 AUTO_MIN_TRADES = 3      # require at least this many trades at a threshold to consider it
 AUTO_GRID_STEP  = 0.05   # sweep step for threshold grid [0.00..1.00]
 
-# ---------- Helpers ----------
+# Polygon key (env or Streamlit secrets)
+POLYGON_KEY = st.secrets.get("POLYGON_API_KEY", os.getenv("POLYGON_API_KEY", ""))
+
+# --------------------------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------------------------
 def add_rownum(df_in):
     df = df_in.copy()
     df.insert(0, "#", range(1, len(df) + 1))
@@ -34,21 +46,65 @@ def date_only_cols(df_in, cols=("entry_date","exit_date")):
             df[c] = s.dt.strftime("%Y-%m-%d").where(s.notna(), df[c])
     return df
 
-@st.cache_data(show_spinner=False)
-def load_data():
-    df = pd.read_csv("stocks.csv", parse_dates=["date"])
-    caps = pd.read_csv("market_cap.csv")
-    top_symbols = (
-        caps[~caps["cap_score"].isin([3, 4])]
-        .sort_values("cap_score")
-        .head(100)["symbol"]
-        .tolist()
-    )
-    df = df[df["symbol"].isin(top_symbols)].copy()
-    caps = caps[caps["symbol"].isin(top_symbols)].copy()
-    return df.sort_values(["symbol", "date"]), caps
+# --------------------------------------------------------------------------------------
+# Light Polygon client (daily OHLCV)
+# --------------------------------------------------------------------------------------
+import requests
 
-# ---------- GARCH: risk index ----------
+def _log(msg: str):
+    st.write(msg)
+
+def _polygon_get(url: str, params=None, timeout=30, max_retries=4):
+    assert POLYGON_KEY, "Missing POLYGON_API_KEY (env var or st.secrets)."
+    params = (params or {}).copy()
+    params["apiKey"] = POLYGON_KEY
+    backoff = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            r = requests.get(url, params=params, timeout=timeout)
+            if r.status_code == 200:
+                return r
+            if r.status_code in (429, 500, 502, 503, 504):
+                _log(f"⚠️ Polygon {r.status_code} (attempt {attempt}/{max_retries}) → retrying after {backoff}s…")
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            _log(f"❌ Polygon HTTP {r.status_code}: {r.text[:200]}")
+            return None
+        except requests.RequestException as e:
+            _log(f"❌ Polygon request error: {e} (attempt {attempt}/{max_retries})")
+            time.sleep(backoff)
+            backoff *= 2
+    return None
+
+def fetch_polygon_daily(symbol: str, start: str, end: str, asset_type: str) -> pd.DataFrame:
+    """
+    symbol: 'AAPL' for stocks, 'BTCUSD' (no 'X:' prefix) for crypto rows in stocks.csv
+    asset_type: 'stock' or 'crypto'
+    """
+    if asset_type == "crypto":
+        ticker = f"X:{symbol}"  # e.g., BTCUSD -> X:BTCUSD
+    else:
+        ticker = symbol         # e.g., AAPL
+
+    url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}"
+    r = _polygon_get(url, params={"adjusted": "true", "sort": "asc", "limit": 50000})
+    if r is None or r.status_code != 200:
+        return pd.DataFrame()
+    results = r.json().get("results", [])
+    if not results:
+        return pd.DataFrame()
+    df = pd.DataFrame(results)
+    df["date"] = pd.to_datetime(df["t"], unit="ms", utc=True).dt.tz_convert(None)
+    df = df.rename(columns={"o":"open","h":"high","l":"low","c":"close","v":"volume"})[
+        ["date","open","high","low","close","volume"]
+    ]
+    df["symbol"] = symbol
+    return df
+
+# --------------------------------------------------------------------------------------
+# GARCH: risk index
+# --------------------------------------------------------------------------------------
 def garch_volatility_forecast(series: pd.Series) -> float | None:
     """
     GARCH(1,1) on decimal log-returns (mean='Zero', dist='t').
@@ -70,7 +126,9 @@ def garch_volatility_forecast(series: pd.Series) -> float | None:
     except Exception:
         return None
 
-# --- OAAT simulator that accepts a GARCH hard filter threshold ---
+# --------------------------------------------------------------------------------------
+# OAAT simulator (with GARCH threshold)
+# --------------------------------------------------------------------------------------
 def simulate_oaat(
     trades_in: pd.DataFrame,
     start_ts: pd.Timestamp,
@@ -78,8 +136,8 @@ def simulate_oaat(
     starting_capital: float = 10000.0,
     alloc_pct: float = 100.0,
     *,
-    threshold: float = 0.50,       # hard filter: keep only trades with garch_risk_index >= threshold
-    require_garch: bool = True     # if True, drop NaN risk; if False, treat NaN as 1.0
+    threshold: float = 0.50,       # keep only trades with garch_risk_index >= threshold
+    require_garch: bool = True
 ):
     t = trades_in.copy().sort_values("entry_date")
     if require_garch:
@@ -165,6 +223,9 @@ def simulate_oaat(
     )
     return metrics, res
 
+# --------------------------------------------------------------------------------------
+# Attach GARCH risk index to trades
+# --------------------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def attach_garch_risk_index(df_prices: pd.DataFrame,
                             trades_df: pd.DataFrame,
@@ -172,7 +233,7 @@ def attach_garch_risk_index(df_prices: pd.DataFrame,
                             lookback: int | None = 252) -> pd.DataFrame:
     """
     Adds one column per trade:
-      • garch_risk_index ∈ (0,1], where LOWER = riskier; computed as min(1, base_vol/ann_vol).
+      • garch_risk_index ∈ (0,1], where LOWER = riskier; min(1, base_vol / ann_vol).
     Uses price history strictly before each entry_date, optionally capped by lookback.
     """
     df_sorted = df_prices.sort_values(["symbol", "date"])
@@ -200,7 +261,9 @@ def attach_garch_risk_index(df_prices: pd.DataFrame,
     trades2["garch_risk_index"] = out
     return trades2
 
-# --- Auto-learn per-symbol thresholds from CLOSED trades only ---
+# --------------------------------------------------------------------------------------
+# Auto-learn per-symbol thresholds from CLOSED trades only
+# --------------------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def optimize_thresholds_per_symbol_closed(
     trades_all: pd.DataFrame,
@@ -250,18 +313,130 @@ def optimize_thresholds_per_symbol_closed(
 
     return best_map, pd.DataFrame(rows)
 
-# ---------- Sidebar ----------
-st.sidebar.header("Navigation")
-page = st.sidebar.radio("Choose page", ["Home", "Insights", "Tester", "Compare"], index=0)
+# --------------------------------------------------------------------------------------
+# Data loading + DAILY UPDATE (stocks + crypto)
+# --------------------------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def load_raw_prices() -> pd.DataFrame:
+    df = pd.read_csv("stocks.csv", parse_dates=["date"])
+    if "asset_type" not in df.columns:
+        df["asset_type"] = "stock"
+    # backfill crypto sector if missing
+    df.loc[(df["asset_type"] == "crypto") & (~df.columns.isin(["sector"]) or df["sector"].isna()), "sector"] = "Crypto"
+    return df
 
-# ---------- Load and Prepare ----------
-df, caps = load_data()
+def _yesterday_utc_date() -> pd.Timestamp:
+    return (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+def _safe_min_date(d):
+    try:
+        return pd.to_datetime(d).date()
+    except Exception:
+        return None
+
+def update_prices_if_needed(df_existing: pd.DataFrame) -> pd.DataFrame:
+    """
+    Updates stocks.csv to include daily bars up to yesterday (UTC) for both stocks and crypto.
+    Only fetches missing days per symbol. Writes to disk only if new rows exist.
+    """
+    if POLYGON_KEY == "":
+        st.info("⚠️ POLYGON_API_KEY not set; skipping auto-update.")
+        return df_existing
+
+    target_end = _yesterday_utc_date()
+    if df_existing["date"].dt.date.max() >= target_end:
+        return df_existing  # already up-to-date
+
+    # Build last-date map per symbol
+    last_dates = (
+        df_existing.groupby(["symbol","asset_type"])["date"]
+        .max().dt.date.reset_index().rename(columns={"date":"last_date"})
+    )
+
+    new_frames = []
+    with st.spinner("🔄 Updating daily prices to yesterday…"):
+        prog = st.progress(0.0)
+        for idx, row in last_dates.iterrows():
+            sym = row["symbol"]
+            a_type = row["asset_type"]
+            last = row["last_date"]
+            if last is None:
+                continue
+            start = (pd.Timestamp(last) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            end   = pd.Timestamp(target_end).strftime("%Y-%m-%d")
+            if start > end:
+                prog.progress(min(1.0, (idx+1)/len(last_dates)))
+                continue
+
+            st.write(f"📡 Fetching {sym} [{a_type}] {start} → {end}")
+            df_new = fetch_polygon_daily(sym, start, end, a_type)
+            if not df_new.empty:
+                # carry forward metadata (sector, asset_type)
+                meta = df_existing.loc[df_existing["symbol"] == sym].iloc[-1]
+                df_new["asset_type"] = a_type
+                df_new["sector"] = meta.get("sector", None)
+                new_frames.append(df_new)
+            prog.progress(min(1.0, (idx+1)/len(last_dates)))
+
+    if not new_frames:
+        st.success("✅ Prices already up-to-date.")
+        return df_existing
+
+    df_new_all = pd.concat(new_frames, ignore_index=True)
+    combined = pd.concat([df_existing, df_new_all], ignore_index=True)
+    combined = (combined
+                .drop_duplicates(subset=["symbol","date"])
+                .sort_values(["symbol","date"])
+                .reset_index(drop=True))
+    combined.to_csv("stocks.csv", index=False)
+    st.success(f"✅ Updated stocks.csv with {len(df_new_all):,} new rows.")
+    return combined
+
+@st.cache_data(show_spinner=False)
+def load_caps() -> pd.DataFrame:
+    caps = pd.read_csv("market_cap.csv")
+    return caps
+
+# Sidebar actions
+st.sidebar.header("Data")
+if st.sidebar.button("🔄 Update data now"):
+    # clear caches so we truly reload + update
+    load_raw_prices.clear()
+    df0 = load_raw_prices()
+    df0 = update_prices_if_needed(df0)
+    st.experimental_rerun()
+
+# Always try to update on app start (if needed)
+df0 = load_raw_prices()
+df0 = update_prices_if_needed(df0)
+
+# --------------------------------------------------------------------------------------
+# Universe selection
+#   - For stocks: filter by market_cap (remove cap 3 & 4, then take top 100 by cap_score)
+#   - For crypto: keep ALL crypto symbols
+# --------------------------------------------------------------------------------------
+caps = load_caps()
+# cap info only applies to stocks; crypto may not appear in caps
+stocks_only = df0[df0["asset_type"] == "stock"].copy()
+crypto_only = df0[df0["asset_type"] == "crypto"].copy()
+
+# restrict stocks to top 100 by cap_score excluding 3 & 4
+stocks_caps = caps[~caps["cap_score"].isin([3, 4])].sort_values("cap_score")
+top_stock_symbols = stocks_caps.head(100)["symbol"].unique().tolist()
+
+# keep all crypto symbols present
+crypto_symbols = crypto_only["symbol"].unique().tolist()
+
+final_symbols = set(top_stock_symbols) | set(crypto_symbols)
+df = df0[df0["symbol"].isin(final_symbols)].copy().sort_values(["symbol","date"])
+
+# cap maps (won’t exist for crypto; that’s fine)
 cap_score_map = caps.set_index("symbol")["cap_score"]
 cap_emoji_map = caps.set_index("symbol")["cap_emoji"]
-symbols_to_keep = cap_score_map[~cap_score_map.isin([3, 4])].index.tolist()
-df = df[df["symbol"].isin(symbols_to_keep)].copy()
 
-# ---------- Run Strategy ----------
+# --------------------------------------------------------------------------------------
+# Strategy → Trades
+# --------------------------------------------------------------------------------------
 with st.spinner("⏳ Detecting trades..."):
     trades_raw = run_strategy(df)
 
@@ -269,7 +444,7 @@ if trades_raw.empty:
     st.warning("No trades detected.")
     st.stop()
 
-# ---------- Attach GARCH & auto-apply per-symbol thresholds ----------
+# Attach GARCH & auto-apply per-symbol thresholds
 with st.spinner("🔎 Computing GARCH risk index..."):
     trades_all = attach_garch_risk_index(df, trades_raw, base_vol_dec=0.20, lookback=252)
 
@@ -309,7 +484,9 @@ if trades.empty:
     st.warning("All trades were filtered out by auto thresholds. Likely too few closed trades yet.")
     st.stop()
 
-# ---------- Postprocess ----------
+# --------------------------------------------------------------------------------------
+# Postprocess & enrich
+# --------------------------------------------------------------------------------------
 sector_map = df[["symbol", "sector"]].drop_duplicates().set_index("symbol")["sector"]
 trades["sector"] = trades["symbol"].map(sector_map)
 trades["cap_score"] = trades["symbol"].map(cap_score_map)
@@ -342,20 +519,18 @@ for _, r in trades[trades["exit_date"].isna()].iterrows():
 minmax_df = pd.DataFrame(minmax, columns=["symbol", "entry_date", "min_low", "max_high"]) if minmax else pd.DataFrame(columns=["symbol","entry_date","min_low","max_high"])
 trades = trades.merge(minmax_df, on=["symbol", "entry_date"], how="left")
 
-# Closed perf metrics
+# Closed perf aggregates for display (avg_return / avg_win / win_rate)
 closed = trades[trades["exit_date"].notna()].copy()
 if not closed.empty:
     closed["pct_return"] = (closed["exit_price"] / closed["entry"] - 1) * 100
     closed["win"] = closed["pct_return"] > 0
 
-    # Per-symbol aggregates
     avg_return = closed.groupby("symbol")["pct_return"].mean().rename("avg_return")
     avg_win_return = (closed[closed["pct_return"] > 0]
                       .groupby("symbol")["pct_return"].mean()
                       .rename("avg_win_return"))
-    win_rate = closed.groupby("symbol")["win"].mean().rename("win_rate")  # 0–1
+    win_rate = closed.groupby("symbol")["win"].mean().rename("win_rate")
 
-    # Attach to all trades (open + closed)
     trades = (trades
               .merge(avg_return, on="symbol", how="left")
               .merge(avg_win_return, on="symbol", how="left")
@@ -365,6 +540,11 @@ else:
     trades["avg_win_return"] = None
     trades["win_rate"] = None
 
+# --------------------------------------------------------------------------------------
+# PAGES
+# --------------------------------------------------------------------------------------
+st.sidebar.header("Navigation")
+page = st.sidebar.radio("Choose page", ["Home", "Insights", "Tester", "Compare"], index=0)
 
 # ---------- HOME ----------
 if page == "Home":
@@ -425,7 +605,6 @@ if page == "Home":
 
         st.dataframe(add_rownum(table), use_container_width=True, hide_index=True)
 
-
 # ---------- INSIGHTS ----------
 if page == "Insights":
     st.subheader("📊 Closed Trades Insights")
@@ -439,7 +618,7 @@ if page == "Insights":
         closed["win"] = closed["pct_return"] > 0
         closed["days_held"] = (closed["exit_date"] - closed["entry_date"]).dt.days
 
-        # --- Core aggregates per symbol ---
+        # Core aggregates per symbol
         agg = closed.groupby("symbol").agg(
             n_trades=("pct_return", "size"),
             avg_return=("pct_return", "mean"),
@@ -447,8 +626,7 @@ if page == "Insights":
             win_rate=("win", "mean"),
         ).reset_index()
 
-        # Compounded "Total Return %" per symbol across its closed trades
-        # (e.g., +10%, +20%, -5% -> (1.10*1.20*0.95 - 1)*100)
+        # Compounded total return % per symbol
         def total_ret_percent(s: pd.Series) -> float:
             return (np.prod(1.0 + s.values/100.0) - 1.0) * 100.0
 
@@ -459,7 +637,6 @@ if page == "Insights":
                   .reset_index()
         )
 
-        # Avg win / loss, for color
         win_mean = (closed[closed["pct_return"] > 0]
                     .groupby("symbol")["pct_return"].mean()
                     .rename("avg_win_return"))
@@ -467,20 +644,14 @@ if page == "Insights":
                      .groupby("symbol")["pct_return"].mean()
                      .rename("avg_loss_return"))
 
-        # Merge everything
-        best = (agg
-                .merge(win_mean, on="symbol", how="left")
-                .merge(loss_mean, on="symbol", how="left")
-                .merge(tot, on="symbol", how="left"))
+        best = (agg.merge(win_mean, on="symbol", how="left")
+                    .merge(loss_mean, on="symbol", how="left")
+                    .merge(tot, on="symbol", how="left"))
 
-        # Enrich display fields
         best["sector"] = best["symbol"].map(sector_map)
         best["symbol_display"] = best["symbol"].map(lambda s: f"{cap_emoji_map.get(s,'')} {s}")
-
-        # 🔝 Sort by compounded Total Return %
         best = best.sort_values("total_return_%", ascending=False)
 
-        # Pretty strings
         disp = best.copy()
         disp["win_rate_str"]         = disp["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
         disp["total_return_str"]     = disp["total_return_%"].map(lambda x: pct_str(x))
