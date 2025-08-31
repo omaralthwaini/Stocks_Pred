@@ -2,12 +2,15 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import timedelta
 from strategy import run_strategy
-from arch import arch_model  # NEW: for GARCH
+from arch import arch_model  # for GARCH
 
 st.set_page_config(page_title="Smart Backtester", layout="wide")
 st.title("📈 Smart Backtester")
+
+# === Auto threshold settings (global, always on) ===
+AUTO_MIN_TRADES = 3      # require at least this many trades at a threshold to consider it
+AUTO_GRID_STEP  = 0.05   # sweep step for threshold grid [0.00..1.00]
 
 # ---------- Helpers ----------
 def add_rownum(df_in):
@@ -37,7 +40,7 @@ def load_data():
     caps = pd.read_csv("market_cap.csv")
     top_symbols = (
         caps[~caps["cap_score"].isin([3, 4])]
-        .sort_values("cap_score")  # low cap_score = higher quality
+        .sort_values("cap_score")
         .head(100)["symbol"]
         .tolist()
     )
@@ -45,11 +48,11 @@ def load_data():
     caps = caps[caps["symbol"].isin(top_symbols)].copy()
     return df.sort_values(["symbol", "date"]), caps
 
-# ---------- GARCH: stable risk index ----------
+# ---------- GARCH: risk index ----------
 def garch_volatility_forecast(series: pd.Series) -> float | None:
     """
     GARCH(1,1) on decimal log-returns (mean='Zero', dist='t').
-    Returns 1-day-ahead **annualized** vol in DECIMAL units (e.g., 0.22 = 22%).
+    Returns 1D-ahead **annualized** volatility in DECIMAL units (e.g., 0.22 = 22%).
     """
     px = pd.Series(series).astype(float)
     px = px.replace([np.inf, -np.inf], np.nan).dropna()
@@ -58,15 +61,15 @@ def garch_volatility_forecast(series: pd.Series) -> float | None:
     if len(rets) < 50:
         return None
     try:
-        am = arch_model(rets, vol="GARCH", p=1, q=1, mean="Zero", dist="t")  # rescale=True by default
-        res = am.fit(disp="off")
+        am = arch_model(rets, vol="GARCH", p=1, q=1, mean="Zero", dist="t")
+        res = am.fit(disp='off')
         fc = res.forecast(horizon=1, reindex=False)
         var1 = float(fc.variance.iloc[-1, 0])
         ann_vol = float(np.sqrt(var1) * np.sqrt(252))  # decimal
         return ann_vol if np.isfinite(ann_vol) and ann_vol > 0 else None
     except Exception:
         return None
-    
+
 # --- OAAT simulator that accepts a GARCH hard filter threshold ---
 def simulate_oaat(
     trades_in: pd.DataFrame,
@@ -82,10 +85,8 @@ def simulate_oaat(
     if require_garch:
         t = t[t["garch_risk_index"].notna()]
     else:
-        # if not requiring garch, treat NaN as 1.0 for the filter
         t["garch_risk_index"] = t["garch_risk_index"].fillna(1.0)
 
-    # hard filter by threshold
     t = t[t["garch_risk_index"].ge(threshold)]
 
     capital = float(starting_capital)
@@ -108,7 +109,6 @@ def simulate_oaat(
             exit_date = ex_d
             status = "Realized"
         else:
-            # needs a latest_close column upstream (you already add it)
             exit_px = float(r["latest_close"])
             ret_pct = (exit_px / entry - 1.0) * 100.0
             available_from = end_ts + pd.Timedelta(days=1)
@@ -129,7 +129,6 @@ def simulate_oaat(
             "capital_after": capital
         })
 
-    # ----- handle “no trades taken” safely -----
     if not taken:
         res = pd.DataFrame(columns=[
             "symbol","entry_date","exit_date","entry","exit_or_last","ret_pct","status","capital_after"
@@ -144,11 +143,9 @@ def simulate_oaat(
             max_loss=float("nan"),
         )
         return metrics, res
-    # -------------------------------------------
 
     res = pd.DataFrame(taken).sort_values("entry_date").reset_index(drop=True)
 
-    # KPIs
     n_trades = len(res)
     n_real = (res["status"] == "Realized").sum()
     win_rate = (res.loc[res["status"] == "Realized", "ret_pct"] > 0).mean() if n_real else float("nan")
@@ -167,8 +164,6 @@ def simulate_oaat(
         max_loss=max_loss,
     )
     return metrics, res
-
-
 
 @st.cache_data(show_spinner=False)
 def attach_garch_risk_index(df_prices: pd.DataFrame,
@@ -205,13 +200,59 @@ def attach_garch_risk_index(df_prices: pd.DataFrame,
     trades2["garch_risk_index"] = out
     return trades2
 
+# --- Auto-learn per-symbol thresholds from CLOSED trades only ---
+@st.cache_data(show_spinner=False)
+def optimize_thresholds_per_symbol_closed(
+    trades_all: pd.DataFrame,
+    *,
+    step: float = AUTO_GRID_STEP,
+    min_trades: int = AUTO_MIN_TRADES,
+) -> tuple[dict, pd.DataFrame]:
+    """
+    For each symbol, sweep thresholds in [0,1] (step=step) on CLOSED trades only,
+    simulate OAAT, and select the threshold that maximizes total return, with
+    at least min_trades at that threshold. Tie-breakers: more trades, then lower thr.
+    """
+    closed = trades_all[trades_all["exit_date"].notna()].copy()
+    if closed.empty:
+        sym_set = sorted(trades_all["symbol"].unique())
+        return ({s: 0.00 for s in sym_set}, pd.DataFrame(columns=["symbol","threshold","trades","total_return_%","win_rate_%"]))
+
+    start_ts = closed["entry_date"].min()
+    end_ts   = closed["exit_date"].max()
+
+    thr_values = np.round(np.arange(0.0, 1.0 + 1e-9, step), 2)
+    rows, best_map = [], {}
+
+    for sym, cand in closed.groupby("symbol"):
+        best = None  # tuple(score, trades, -thr, thr)
+        for thr in thr_values:
+            m, _ = simulate_oaat(
+                cand, start_ts, end_ts,
+                starting_capital=10000.0, alloc_pct=100.0,
+                threshold=thr, require_garch=True
+            )
+            tr = m["trades"]
+            score = m["total_return"]
+            rows.append({
+                "symbol": sym,
+                "threshold": thr,
+                "trades": tr,
+                "total_return_%": score,
+                "win_rate_%": (m["win_rate"]*100 if pd.notna(m["win_rate"]) else np.nan),
+            })
+            if tr < min_trades:
+                continue
+            candidate = (score, tr, -thr, thr)
+            if (best is None) or (candidate > best):
+                best = candidate
+        best_map[sym] = (best[3] if best is not None else 0.00)
+
+    return best_map, pd.DataFrame(rows)
+
 # ---------- Sidebar ----------
 st.sidebar.header("Navigation")
 page = st.sidebar.radio("Choose page", ["Home", "Insights", "Tester", "Compare"], index=0)
-near_band_pp = st.sidebar.number_input("Zone band (± %)", min_value=0.1, max_value=10.0, step=0.1, value=1.0)
-
-# GARCH filter threshold (default 0.50 as requested)
-risk_cutoff = st.sidebar.slider("Min GARCH risk index (lower=riskier)", 0.0, 1.0, 0.50, 0.05)
 
 # ---------- Load and Prepare ----------
 df, caps = load_data()
@@ -222,23 +263,50 @@ df = df[df["symbol"].isin(symbols_to_keep)].copy()
 
 # ---------- Run Strategy ----------
 with st.spinner("⏳ Detecting trades..."):
-    trades = run_strategy(df)
+    trades_raw = run_strategy(df)
 
-if trades.empty:
+if trades_raw.empty:
     st.warning("No trades detected.")
     st.stop()
 
-# ---------- NEW: attach GARCH & FILTER (< 0.50 removed) ----------
-with st.spinner("🔎 Computing GARCH risk index and filtering..."):
-    trades = attach_garch_risk_index(df, trades, base_vol_dec=0.20, lookback=252)
-    before_n = len(trades)
-    trades = trades[trades["garch_risk_index"].ge(risk_cutoff)].copy()
-    after_n = len(trades)
+# ---------- Attach GARCH & auto-apply per-symbol thresholds ----------
+with st.spinner("🔎 Computing GARCH risk index..."):
+    trades_all = attach_garch_risk_index(df, trades_raw, base_vol_dec=0.20, lookback=252)
 
-st.caption(f"Applied GARCH filter: kept {after_n}/{before_n} trades with risk index ≥ {risk_cutoff:.2f}.")
+before_n = len(trades_all)
+
+with st.spinner("🧠 Learning per-ticker thresholds from CLOSED trades..."):
+    thr_map, sweep_long = optimize_thresholds_per_symbol_closed(
+        trades_all, step=AUTO_GRID_STEP, min_trades=AUTO_MIN_TRADES
+    )
+
+def _accept_row(r):
+    thr = thr_map.get(r["symbol"], 0.00)  # default if symbol had no closed trades
+    return pd.notna(r["garch_risk_index"]) and (r["garch_risk_index"] >= thr)
+
+trades = trades_all[trades_all.apply(_accept_row, axis=1)].copy()
+after_n = len(trades)
+
+with st.expander("Per-symbol auto thresholds (learned on CLOSED trades)"):
+    thr_df = pd.DataFrame(
+        [{"symbol": s, "auto_threshold": thr_map[s]} for s in sorted(thr_map.keys())]
+    ).sort_values(["auto_threshold","symbol"])
+    st.dataframe(thr_df, use_container_width=True, hide_index=True)
+
+with st.expander("Threshold sweep results (per symbol)"):
+    if not sweep_long.empty:
+        st.dataframe(sweep_long.sort_values(["symbol","threshold"]),
+                     use_container_width=True, hide_index=True)
+    else:
+        st.info("No closed trades available to train thresholds.")
+
+st.caption(
+    f"Auto per-ticker thresholds applied (trained on CLOSED trades; min_trades={AUTO_MIN_TRADES}, step={AUTO_GRID_STEP:.2f}). "
+    f"Kept {after_n}/{before_n} trades."
+)
 
 if trades.empty:
-    st.warning("All trades were filtered out by the GARCH threshold. Try lowering the threshold in the sidebar.")
+    st.warning("All trades were filtered out by auto thresholds. Likely too few closed trades yet.")
     st.stop()
 
 # ---------- Postprocess ----------
@@ -293,7 +361,6 @@ if page == "Home":
     if open_trades.empty:
         st.info("No open trades.")
     else:
-        # KPIs
         unrealized_total = open_trades["unrealized_pct_return"].mean()
         earliest_entry = open_trades["entry_date"].min()
         avg_hold = (pd.Timestamp.today().normalize() - open_trades["entry_date"]).dt.days.mean()
@@ -312,7 +379,6 @@ if page == "Home":
         c5.metric("Best Performer", best_symbol)
         c6.metric("Worst Performer", worst_symbol)
 
-        # Display table
         open_trades = open_trades.sort_values(["entry_date", "avg_return"], ascending=[False, False])
 
         def emoji_unrealized(x):
@@ -418,7 +484,6 @@ if page == "Tester":
     end_date = st.sidebar.date_input("End date", value=trades["entry_date"].max().date())
     start_ts, end_ts = pd.Timestamp(start_date), pd.Timestamp(end_date)
 
-    # Optional ticker filter within selected window
     tickers_in_window = trades[
         (trades["entry_date"] >= start_ts) &
         (trades["entry_date"] <= end_ts)
@@ -432,7 +497,6 @@ if page == "Tester":
     starting_capital = st.sidebar.number_input("Starting Capital ($)", min_value=1000.0, step=100.0, value=10000.0)
     alloc_pct = st.sidebar.number_input("Allocation per trade (%)", min_value=1.0, max_value=100.0, step=1.0, value=100.0)
 
-    # Apply filter BEFORE sim
     candidates = trades[
         (trades["entry_date"] >= start_ts) &
         (trades["entry_date"] <= end_ts) &
@@ -443,7 +507,6 @@ if page == "Tester":
         st.info("No trades match the selected window and tickers.")
         st.stop()
 
-    # Simulation
     capital = float(starting_capital)
     available_from = start_ts
     ledger = []
@@ -487,7 +550,6 @@ if page == "Tester":
 
     res = pd.DataFrame(ledger).sort_values("entry_date").reset_index(drop=True)
 
-    # Summary KPIs
     n_trades = len(res)
     n_real = (res["status"] == "Realized").sum()
     win_rate = (res.loc[res["status"] == "Realized", "ret_pct"] > 0).mean() if n_real else float("nan")
@@ -517,28 +579,25 @@ if page == "Tester":
 
 # ---------- COMPARE ----------
 if page == "Compare":
-    st.subheader("🆚 GARCH Threshold A/B Compare")
+    st.subheader("🆚 GARCH Threshold A/B Compare (manual)")
 
-    # Recompute raw trades (unfiltered) and attach GARCH once (cached)
     with st.spinner("⏳ Preparing trades and GARCH index..."):
-        trades_raw = run_strategy(df)
-        if trades_raw.empty:
+        trades_base = run_strategy(df)
+        if trades_base.empty:
             st.info("No trades detected.")
             st.stop()
-        trades_all = attach_garch_risk_index(df, trades_raw, base_vol_dec=0.20, lookback=252)
+        trades_all_cmp = attach_garch_risk_index(df, trades_base, base_vol_dec=0.20, lookback=252)
 
-        # enrich with latest prices (like elsewhere)
         latest_prices = df.groupby("symbol", as_index=False).agg(latest_close=("close", "last"))
-        trades_all = trades_all.merge(latest_prices, on="symbol", how="left")
+        trades_all_cmp = trades_all_cmp.merge(latest_prices, on="symbol", how="left")
 
-    # Time window & ticker filter
-    start_date = st.sidebar.date_input("Start date", value=trades_all["entry_date"].min().date())
-    end_date = st.sidebar.date_input("End date", value=trades_all["entry_date"].max().date())
+    start_date = st.sidebar.date_input("Start date", value=trades_all_cmp["entry_date"].min().date())
+    end_date = st.sidebar.date_input("End date", value=trades_all_cmp["entry_date"].max().date())
     start_ts, end_ts = pd.Timestamp(start_date), pd.Timestamp(end_date)
 
-    tickers_in_window = trades_all[
-        (trades_all["entry_date"] >= start_ts) &
-        (trades_all["entry_date"] <= end_ts)
+    tickers_in_window = trades_all_cmp[
+        (trades_all_cmp["entry_date"] >= start_ts) &
+        (trades_all_cmp["entry_date"] <= end_ts)
     ]["symbol"].unique().tolist()
     selected_tickers = st.sidebar.multiselect(
         "Tickers (within window)", options=sorted(tickers_in_window), default=tickers_in_window
@@ -547,23 +606,20 @@ if page == "Compare":
     starting_capital = st.sidebar.number_input("Starting Capital ($)", min_value=1000.0, step=100.0, value=10000.0)
     alloc_pct = st.sidebar.number_input("Allocation per trade (%)", min_value=1.0, max_value=100.0, step=1.0, value=100.0)
 
-    # Thresholds to compare
     cA, cB = st.columns(2)
     thrA = cA.number_input("Threshold A", min_value=0.0, max_value=1.0, step=0.05, value=0.00)
     thrB = cB.number_input("Threshold B", min_value=0.0, max_value=1.0, step=0.05, value=0.50)
 
-    # Candidate trades (only from selected tickers and window)
-    candidates = trades_all[
-        (trades_all["entry_date"] >= start_ts) &
-        (trades_all["entry_date"] <= end_ts) &
-        (trades_all["symbol"].isin(selected_tickers))
+    candidates = trades_all_cmp[
+        (trades_all_cmp["entry_date"] >= start_ts) &
+        (trades_all_cmp["entry_date"] <= end_ts) &
+        (trades_all_cmp["symbol"].isin(selected_tickers))
     ].copy()
 
     if candidates.empty:
         st.info("No trades match the selected window and tickers.")
         st.stop()
 
-    # Simulate A and B
     metricsA, resA = simulate_oaat(
         candidates, start_ts, end_ts,
         starting_capital=starting_capital, alloc_pct=alloc_pct,
@@ -575,7 +631,6 @@ if page == "Compare":
         threshold=thrB, require_garch=True
     )
 
-    # KPIs side-by-side
     st.write("### Results")
     colA, colB, colΔ = st.columns(3)
     colA.metric("Final capital (A)", money_str(metricsA["final_capital"]))
@@ -594,7 +649,6 @@ if page == "Compare":
     c6.metric("Δ Win Rate", "—" if (pd.isna(metricsA['win_rate']) or pd.isna(metricsB['win_rate']))
               else f"{(metricsB['win_rate']-metricsA['win_rate']):.0%}")
 
-    # Optional: show taken trades for each
     with st.expander("Show taken trades (A)"):
         tmp = resA.copy()
         tmp["ret_pct"] = tmp["ret_pct"].map(lambda x: f"{x:+.2f}%")
@@ -607,7 +661,6 @@ if page == "Compare":
         tmp = date_only_cols(tmp, ["entry_date","exit_date"])
         st.dataframe(add_rownum(tmp), use_container_width=True, hide_index=True)
 
-    # Threshold sweep (quick grid search)
     st.write("### Threshold sweep")
     step = st.slider("Step", 0.01, 0.25, 0.05, 0.01)
     thr_values = np.round(np.arange(0.0, 1.0 + 1e-9, step), 2)
