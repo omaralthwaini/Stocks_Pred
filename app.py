@@ -418,37 +418,74 @@ if page == "Insights":
     if closed.empty:
         st.info("No closed trades to analyze.")
     else:
+        # Per-trade realized P/L %
         closed["pct_return"] = (closed["exit_price"] / closed["entry"] - 1) * 100
         closed["win"] = closed["pct_return"] > 0
         closed["days_held"] = (closed["exit_date"] - closed["entry_date"]).dt.days
 
-        base = closed.groupby("symbol").agg(
+        # --- Core aggregates per symbol ---
+        agg = closed.groupby("symbol").agg(
             n_trades=("pct_return", "size"),
             avg_return=("pct_return", "mean"),
-            avg_days=("days_held", "mean")
+            avg_days=("days_held", "mean"),
+            win_rate=("win", "mean"),
         ).reset_index()
 
-        win_mean = closed[closed["pct_return"] > 0].groupby("symbol")["pct_return"].mean().rename("avg_win_return")
-        loss_mean = closed[closed["pct_return"] < 0].groupby("symbol")["pct_return"].mean().rename("avg_loss_return")
+        # Compounded "Total Return %" per symbol across its closed trades
+        # (e.g., +10%, +20%, -5% -> (1.10*1.20*0.95 - 1)*100)
+        def total_ret_percent(s: pd.Series) -> float:
+            return (np.prod(1.0 + s.values/100.0) - 1.0) * 100.0
 
-        best = base.merge(win_mean, on="symbol", how="left").merge(loss_mean, on="symbol", how="left")
+        tot = (
+            closed.groupby("symbol")["pct_return"]
+                  .apply(total_ret_percent)
+                  .rename("total_return_%")
+                  .reset_index()
+        )
+
+        # Avg win / loss, for color
+        win_mean = (closed[closed["pct_return"] > 0]
+                    .groupby("symbol")["pct_return"].mean()
+                    .rename("avg_win_return"))
+        loss_mean = (closed[closed["pct_return"] < 0]
+                     .groupby("symbol")["pct_return"].mean()
+                     .rename("avg_loss_return"))
+
+        # Merge everything
+        best = (agg
+                .merge(win_mean, on="symbol", how="left")
+                .merge(loss_mean, on="symbol", how="left")
+                .merge(tot, on="symbol", how="left"))
+
+        # Enrich display fields
         best["sector"] = best["symbol"].map(sector_map)
         best["symbol_display"] = best["symbol"].map(lambda s: f"{cap_emoji_map.get(s,'')} {s}")
-        best = best.sort_values("avg_return", ascending=False)
 
+        # 🔝 Sort by compounded Total Return %
+        best = best.sort_values("total_return_%", ascending=False)
+
+        # Pretty strings
         disp = best.copy()
-        disp["avg_return_str"] = disp["avg_return"].map(lambda x: pct_str(x))
-        disp["avg_win_return_str"] = disp["avg_win_return"].map(lambda x: pct_str(x))
-        disp["avg_loss_return_str"] = disp["avg_loss_return"].map(lambda x: pct_str(x))
-        disp["avg_days_str"] = disp["avg_days"].map(lambda x: f"{x:.1f}")
+        disp["win_rate_str"]         = disp["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
+        disp["total_return_str"]     = disp["total_return_%"].map(lambda x: pct_str(x))
+        disp["avg_return_str"]       = disp["avg_return"].map(lambda x: pct_str(x))
+        disp["avg_win_return_str"]   = disp["avg_win_return"].map(lambda x: pct_str(x))
+        disp["avg_loss_return_str"]  = disp["avg_loss_return"].map(lambda x: pct_str(x))
+        disp["avg_days_str"]         = disp["avg_days"].map(lambda x: "—" if pd.isna(x) else f"{x:.1f}")
+
         show_df = add_rownum(disp[[
-            "symbol_display","sector","n_trades","avg_return_str",
-            "avg_win_return_str","avg_loss_return_str","avg_days_str"
+            "symbol_display", "sector", "n_trades",
+            "win_rate_str", "total_return_str", "avg_return_str",
+            "avg_win_return_str", "avg_loss_return_str", "avg_days_str"
         ]])
+
         st.dataframe(show_df.rename(columns={
             "symbol_display": "Symbol",
+            "sector": "Sector",
             "n_trades": "Trades",
-            "avg_return_str": "Avg Return",
+            "win_rate_str": "Win Rate",
+            "total_return_str": "Total Return",
+            "avg_return_str": "Avg/Trade",
             "avg_win_return_str": "Avg Win",
             "avg_loss_return_str": "Avg Loss",
             "avg_days_str": "Avg Days"
