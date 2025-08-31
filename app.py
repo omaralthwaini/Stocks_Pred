@@ -81,6 +81,10 @@ def simulate_oaat(
     t = trades_in.copy().sort_values("entry_date")
     if require_garch:
         t = t[t["garch_risk_index"].notna()]
+    else:
+        # if not requiring garch, treat NaN as 1.0 for the filter
+        t["garch_risk_index"] = t["garch_risk_index"].fillna(1.0)
+
     # hard filter by threshold
     t = t[t["garch_risk_index"].ge(threshold)]
 
@@ -104,6 +108,7 @@ def simulate_oaat(
             exit_date = ex_d
             status = "Realized"
         else:
+            # needs a latest_close column upstream (you already add it)
             exit_px = float(r["latest_close"])
             ret_pct = (exit_px / entry - 1.0) * 100.0
             available_from = end_ts + pd.Timedelta(days=1)
@@ -124,6 +129,23 @@ def simulate_oaat(
             "capital_after": capital
         })
 
+    # ----- handle “no trades taken” safely -----
+    if not taken:
+        res = pd.DataFrame(columns=[
+            "symbol","entry_date","exit_date","entry","exit_or_last","ret_pct","status","capital_after"
+        ])
+        metrics = dict(
+            final_capital=starting_capital,
+            total_return=0.0,
+            trades=0,
+            win_rate=float("nan"),
+            avg_win_ret=float("nan"),
+            max_win=float("nan"),
+            max_loss=float("nan"),
+        )
+        return metrics, res
+    # -------------------------------------------
+
     res = pd.DataFrame(taken).sort_values("entry_date").reset_index(drop=True)
 
     # KPIs
@@ -131,10 +153,10 @@ def simulate_oaat(
     n_real = (res["status"] == "Realized").sum()
     win_rate = (res.loc[res["status"] == "Realized", "ret_pct"] > 0).mean() if n_real else float("nan")
     avg_win_ret = res.loc[(res["status"] == "Realized") & (res["ret_pct"] > 0), "ret_pct"].mean()
-    max_win = res["ret_pct"].max() if n_trades else float("nan")
-    max_loss = res["ret_pct"].min() if n_trades else float("nan")
-
+    max_win = res["ret_pct"].max()
+    max_loss = res["ret_pct"].min()
     total_ret = (capital / starting_capital - 1.0) * 100.0
+
     metrics = dict(
         final_capital=capital,
         total_return=total_ret,
@@ -145,6 +167,7 @@ def simulate_oaat(
         max_loss=max_loss,
     )
     return metrics, res
+
 
 
 @st.cache_data(show_spinner=False)
