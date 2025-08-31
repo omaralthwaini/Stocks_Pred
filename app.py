@@ -346,12 +346,25 @@ trades = trades.merge(minmax_df, on=["symbol", "entry_date"], how="left")
 closed = trades[trades["exit_date"].notna()].copy()
 if not closed.empty:
     closed["pct_return"] = (closed["exit_price"] / closed["entry"] - 1) * 100
-    win_mean = closed[closed["pct_return"] > 0].groupby("symbol")["pct_return"].mean().rename("avg_win_return")
+    closed["win"] = closed["pct_return"] > 0
+
+    # Per-symbol aggregates
     avg_return = closed.groupby("symbol")["pct_return"].mean().rename("avg_return")
-    trades = trades.merge(avg_return, on="symbol", how="left").merge(win_mean, on="symbol", how="left")
+    avg_win_return = (closed[closed["pct_return"] > 0]
+                      .groupby("symbol")["pct_return"].mean()
+                      .rename("avg_win_return"))
+    win_rate = closed.groupby("symbol")["win"].mean().rename("win_rate")  # 0–1
+
+    # Attach to all trades (open + closed)
+    trades = (trades
+              .merge(avg_return, on="symbol", how="left")
+              .merge(avg_win_return, on="symbol", how="left")
+              .merge(win_rate, on="symbol", how="left"))
 else:
     trades["avg_return"] = None
     trades["avg_win_return"] = None
+    trades["win_rate"] = None
+
 
 # ---------- HOME ----------
 if page == "Home":
@@ -387,7 +400,7 @@ if page == "Home":
 
         table = open_trades[[
             "symbol_display", "sector", "entry_date", "entry", "stop_loss",
-            "avg_return", "avg_win_return", "unrealized_pct_return"
+            "avg_return", "avg_win_return", "win_rate", "unrealized_pct_return"
         ]].copy()
 
         table = date_only_cols(table, ["entry_date"])
@@ -395,6 +408,7 @@ if page == "Home":
         table["stop_loss"] = table["stop_loss"].map(money_str)
         table["avg_return"] = table["avg_return"].map(lambda x: pct_str(x))
         table["avg_win_return"] = table["avg_win_return"].map(lambda x: pct_str(x))
+        table["win_rate"] = table["win_rate"].map(lambda x: "—" if pd.isna(x) else f"{x:.0%}")
         table["unrealized_pct_return"] = table["unrealized_pct_return"].map(emoji_unrealized)
 
         table = table.rename(columns={
@@ -405,10 +419,12 @@ if page == "Home":
             "stop_loss": "Stop Loss",
             "avg_return": "Avg Return",
             "avg_win_return": "Avg Win",
-            "unrealized_pct_return": "Unrealized"
+            "win_rate": "Win Rate",
+            "unrealized_pct_return": "Unrealized",
         })
 
         st.dataframe(add_rownum(table), use_container_width=True, hide_index=True)
+
 
 # ---------- INSIGHTS ----------
 if page == "Insights":
