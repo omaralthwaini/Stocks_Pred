@@ -1,8 +1,10 @@
 # app.py
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import timedelta
 from strategy import run_strategy
+from arch import arch_model  # NEW: for GARCH
 
 st.set_page_config(page_title="Smart Backtester", layout="wide")
 st.title("📈 Smart Backtester")
@@ -43,10 +45,70 @@ def load_data():
     caps = caps[caps["symbol"].isin(top_symbols)].copy()
     return df.sort_values(["symbol", "date"]), caps
 
+# ---------- GARCH: stable risk index ----------
+def garch_volatility_forecast(series: pd.Series) -> float | None:
+    """
+    GARCH(1,1) on decimal log-returns (mean='Zero', dist='t').
+    Returns 1-day-ahead **annualized** vol in DECIMAL units (e.g., 0.22 = 22%).
+    """
+    px = pd.Series(series).astype(float)
+    px = px.replace([np.inf, -np.inf], np.nan).dropna()
+    px = px[px > 0]
+    rets = np.log(px / px.shift(1)).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(rets) < 50:
+        return None
+    try:
+        am = arch_model(rets, vol="GARCH", p=1, q=1, mean="Zero", dist="t")  # rescale=True by default
+        res = am.fit(disp="off")
+        fc = res.forecast(horizon=1, reindex=False)
+        var1 = float(fc.variance.iloc[-1, 0])
+        ann_vol = float(np.sqrt(var1) * np.sqrt(252))  # decimal
+        return ann_vol if np.isfinite(ann_vol) and ann_vol > 0 else None
+    except Exception:
+        return None
+
+@st.cache_data(show_spinner=False)
+def attach_garch_risk_index(df_prices: pd.DataFrame,
+                            trades_df: pd.DataFrame,
+                            base_vol_dec: float = 0.20,
+                            lookback: int | None = 252) -> pd.DataFrame:
+    """
+    Adds one column per trade:
+      • garch_risk_index ∈ (0,1], where LOWER = riskier; computed as min(1, base_vol/ann_vol).
+    Uses price history strictly before each entry_date, optionally capped by lookback.
+    """
+    df_sorted = df_prices.sort_values(["symbol", "date"])
+    groups = {sym: g[["date","close"]].reset_index(drop=True)
+              for sym, g in df_sorted.groupby("symbol")}
+
+    out = []
+    for _, r in trades_df.iterrows():
+        sym = r["symbol"]
+        entry_date = pd.to_datetime(r["entry_date"])
+        if sym not in groups:
+            out.append(np.nan); continue
+        g = groups[sym]
+        hist = g[g["date"] < entry_date]["close"]
+        if lookback and lookback > 0:
+            hist = hist.tail(lookback)
+        if len(hist) < 51:
+            out.append(np.nan); continue
+        ann_vol = garch_volatility_forecast(hist)
+        if ann_vol is None or not np.isfinite(ann_vol) or ann_vol <= 1e-9:
+            out.append(np.nan); continue
+        out.append(float(min(1.0, base_vol_dec / ann_vol)))
+
+    trades2 = trades_df.copy()
+    trades2["garch_risk_index"] = out
+    return trades2
+
 # ---------- Sidebar ----------
 st.sidebar.header("Navigation")
 page = st.sidebar.radio("Choose page", ["Home", "Insights", "Tester"], index=0)
 near_band_pp = st.sidebar.number_input("Zone band (± %)", min_value=0.1, max_value=10.0, step=0.1, value=1.0)
+
+# GARCH filter threshold (default 0.50 as requested)
+risk_cutoff = st.sidebar.slider("Min GARCH risk index (lower=riskier)", 0.0, 1.0, 0.50, 0.05)
 
 # ---------- Load and Prepare ----------
 df, caps = load_data()
@@ -61,6 +123,19 @@ with st.spinner("⏳ Detecting trades..."):
 
 if trades.empty:
     st.warning("No trades detected.")
+    st.stop()
+
+# ---------- NEW: attach GARCH & FILTER (< 0.50 removed) ----------
+with st.spinner("🔎 Computing GARCH risk index and filtering..."):
+    trades = attach_garch_risk_index(df, trades, base_vol_dec=0.20, lookback=252)
+    before_n = len(trades)
+    trades = trades[trades["garch_risk_index"].ge(risk_cutoff)].copy()
+    after_n = len(trades)
+
+st.caption(f"Applied GARCH filter: kept {after_n}/{before_n} trades with risk index ≥ {risk_cutoff:.2f}.")
+
+if trades.empty:
+    st.warning("All trades were filtered out by the GARCH threshold. Try lowering the threshold in the sidebar.")
     st.stop()
 
 # ---------- Postprocess ----------
@@ -86,7 +161,7 @@ trades["final_pct"] = trades.apply(
     lambda r: r["pct_return"] if pd.notna(r["exit_price"]) else r["unrealized_pct_return"], axis=1
 )
 
-# Min/Max since entry
+# Min/Max since entry (for open trades)
 minmax = []
 for _, r in trades[trades["exit_date"].isna()].iterrows():
     sym, entry_date = r["symbol"], r["entry_date"]
@@ -166,7 +241,6 @@ if page == "Home":
 
         st.dataframe(add_rownum(table), use_container_width=True, hide_index=True)
 
-
 # ---------- INSIGHTS ----------
 if page == "Insights":
     st.subheader("📊 Closed Trades Insights")
@@ -216,8 +290,8 @@ if page == "Insights":
         all_trades = date_only_cols(all_trades, ["entry_date", "exit_date"])
 
         display = all_trades[[
-        "symbol_display", "sector", "entry_date", "exit_date",
-        "entry", "exit_price", "final_pct", "stop_loss", "min_low", "max_high"
+            "symbol_display", "sector", "entry_date", "exit_date",
+            "entry", "exit_price", "final_pct", "stop_loss", "min_low", "max_high"
         ]].copy()
 
         display["entry"] = display["entry"].map(money_str)
@@ -227,10 +301,10 @@ if page == "Insights":
         st.dataframe(add_rownum(display), use_container_width=True, hide_index=True)
 
         st.download_button(
-        label="📥 Download All Trades",
-        data=display.to_csv(index=False).encode("utf-8"),
-        file_name="all_trades.csv",
-        mime="text/csv"
+            label="📥 Download All Trades",
+            data=display.to_csv(index=False).encode("utf-8"),
+            file_name="all_trades.csv",
+            mime="text/csv"
         )
 
 # ---------- TESTER ----------
@@ -241,7 +315,7 @@ if page == "Tester":
     end_date = st.sidebar.date_input("End date", value=trades["entry_date"].max().date())
     start_ts, end_ts = pd.Timestamp(start_date), pd.Timestamp(end_date)
 
-    # ✅ NEW: optional ticker filter based on tickers within selected window
+    # Optional ticker filter within selected window
     tickers_in_window = trades[
         (trades["entry_date"] >= start_ts) &
         (trades["entry_date"] <= end_ts)
@@ -255,7 +329,7 @@ if page == "Tester":
     starting_capital = st.sidebar.number_input("Starting Capital ($)", min_value=1000.0, step=100.0, value=10000.0)
     alloc_pct = st.sidebar.number_input("Allocation per trade (%)", min_value=1.0, max_value=100.0, step=1.0, value=100.0)
 
-    # ✅ Apply filter BEFORE sim
+    # Apply filter BEFORE sim
     candidates = trades[
         (trades["entry_date"] >= start_ts) &
         (trades["entry_date"] <= end_ts) &
@@ -310,7 +384,7 @@ if page == "Tester":
 
     res = pd.DataFrame(ledger).sort_values("entry_date").reset_index(drop=True)
 
-    # ✅ Summary KPIs + Enhanced Callouts
+    # Summary KPIs
     n_trades = len(res)
     n_real = (res["status"] == "Realized").sum()
     win_rate = (res.loc[res["status"] == "Realized", "ret_pct"] > 0).mean() if n_real else float("nan")
