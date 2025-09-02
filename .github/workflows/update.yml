@@ -2,12 +2,12 @@ name: Auto Update Stocks
 
 on:
   schedule:
-    # —— Daylight Time (EDT, ~Mar–Nov): 09:30–16:30 ET == 13:30–20:30 UTC
+    # EDT (~Mar–Nov): 09:30–16:30 ET == 13:30–20:30 UTC
     - cron: '30 13-20 * * 1-5'
     # Extra pass near close: 16:45 ET == 20:45 UTC
     - cron: '45 20 * * 1-5'
 
-    # —— Standard Time (EST, ~Nov–Mar): 09:30–16:30 ET == 14:30–21:30 UTC
+    # EST (~Nov–Mar): 09:30–16:30 ET == 14:30–21:30 UTC
     - cron: '30 14-21 * * 1-5'
     # Extra pass near close: 16:45 ET == 21:45 UTC
     - cron: '45 21 * * 1-5'
@@ -33,9 +33,12 @@ jobs:
           python-version: '3.10'
 
       - name: Install deps
-        run: pip install pandas requests pytz
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy scipy requests pytz arch
 
       - name: Run stock update
+        # use the actual filename of your updater
         run: python Automation.py
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
@@ -57,3 +60,5 @@ jobs:
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_SMTP_HOST: ${{ secrets.EMAIL_SMTP_HOST }}
           EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
+          # optionally, if your server is SSL/465:
+          # EMAIL_SMTP_SSL: "true"
