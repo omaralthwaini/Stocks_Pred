@@ -4,35 +4,41 @@ import time
 import subprocess
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import pytz
 import requests
-import numpy as np
 
-# --- API key ---
+# ------------------ Config via env ------------------
 POLYGON_KEY = os.getenv("POLYGON_API_KEY", "")
 if not POLYGON_KEY:
     raise EnvironmentError("POLYGON_API_KEY is not set.")
 
-# --- Market-hours guard: 09:30–16:55 ET, Mon–Fri (kept as-is) ---
-now_utc = datetime.utcnow().replace(tzinfo=pytz.UTC)
-et = now_utc.astimezone(pytz.timezone("US/Eastern"))
-weekday = et.weekday()               # 0=Mon .. 6=Sun
-mins = et.hour * 60 + et.minute      # minutes since midnight ET
+# Skip crypto by default (your plan doesn’t include it)
+INCLUDE_CRYPTO = os.getenv("INCLUDE_CRYPTO", "false").lower() in {"1", "true", "yes"}
 
-market_open = 9 * 60 + 30            # 09:30
-market_last = 16 * 60 + 55           # 16:55
+# How many calendar days to fetch ending today (ET). Default 2 = yesterday & today.
+BACKFILL_DAYS = max(1, int(os.getenv("BACKFILL_DAYS", "2")))
+
+# ------------------ Market-hours guard (ET) ------------------
+et_tz = pytz.timezone("US/Eastern")
+now_et = datetime.now(et_tz)
+weekday = now_et.weekday()             # 0=Mon .. 6=Sun
+mins = now_et.hour * 60 + now_et.minute
+
+market_open = 9 * 60 + 30              # 09:30
+market_last = 16 * 60 + 55             # 16:55
 
 # Allow manual overrides (set in workflow)
 FORCE_RUN = os.getenv("FORCE_RUN", "").lower() in {"1", "true", "yes"}
 event_name = os.getenv("GITHUB_EVENT_NAME", "").lower()  # set by Actions
 
-print(f"🕒 ET now: {et:%Y-%m-%d %H:%M}  (weekday={weekday}, mins={mins}, event={event_name}, force={FORCE_RUN})")
+print(f"🕒 ET now: {now_et:%Y-%m-%d %H:%M}  (weekday={weekday}, mins={mins}, event={event_name}, force={FORCE_RUN})")
 if not FORCE_RUN and (weekday >= 5 or not (market_open <= mins <= market_last)):
     print("⏳ Market window closed for updater. Skipping.")
     raise SystemExit(0)
 
-# --- Load existing data ---
+# ------------------ Load existing data ------------------
 existing_path = "stocks.csv"
 if not os.path.exists(existing_path):
     raise FileNotFoundError("stocks.csv not found.")
@@ -45,7 +51,7 @@ if "asset_type" not in existing_df.columns:
 if "sector" not in existing_df.columns:
     existing_df["sector"] = np.nan
 
-# --- Build symbol → metadata map (symbol, sector, asset_type) ---
+# ------------------ Symbol meta ------------------
 meta_cols = ["symbol", "sector", "asset_type"]
 symbol_meta = (
     existing_df[meta_cols]
@@ -53,34 +59,40 @@ symbol_meta = (
     .sort_values("symbol")
     .reset_index(drop=True)
 )
-# For crypto rows missing sector, default to "Crypto"
+
+# Normalize asset_type
+symbol_meta["asset_type"] = symbol_meta["asset_type"].astype(str).str.lower()
+
+# Default missing crypto sector to "Crypto"
 symbol_meta.loc[
-    (symbol_meta["asset_type"].str.lower() == "crypto")
-    & (symbol_meta["sector"].isna()),
+    (symbol_meta["asset_type"] == "crypto") & (symbol_meta["sector"].isna()),
     "sector"
 ] = "Crypto"
 
+# Skip crypto if not included
+if not INCLUDE_CRYPTO:
+    before = len(symbol_meta)
+    symbol_meta = symbol_meta[symbol_meta["asset_type"] != "crypto"]
+    print(f"🔧 Skipping crypto: filtered {before - len(symbol_meta)} crypto symbols.")
+
 n_total = len(symbol_meta)
-n_crypto = (symbol_meta["asset_type"].str.lower() == "crypto").sum()
-n_stocks = n_total - n_crypto
-print(f"🧾 Symbols to update: {n_total}  (stocks={n_stocks}, crypto={n_crypto})")
+print(f"🧾 Symbols to update: {n_total}")
 
-# --- Date range: yesterday + today (daily bars) ---
-today = datetime.now().date()
-yesterday = today - timedelta(days=1)
-start_date = yesterday.strftime("%Y-%m-%d")
-end_date = today.strftime("%Y-%m-%d")
-print(f"📅 Fetch window: {start_date} → {end_date}")
+# ------------------ Date window (ET) ------------------
+end_date = now_et.date()
+start_date = end_date - timedelta(days=BACKFILL_DAYS - 1)
+start_str = start_date.strftime("%Y-%m-%d")
+end_str   = end_date.strftime("%Y-%m-%d")
+print(f"📅 Fetch window (ET calendar): {start_str} → {end_str}  (days={BACKFILL_DAYS})")
 
-# --- Helpers ---
-def to_polygon_ticker(symbol: str, asset_type: str) -> str:
-    """Stocks use raw ticker (AAPL); crypto uses 'X:BTCUSD' etc."""
-    if str(asset_type).lower() == "crypto":
+# ------------------ Polygon fetch ------------------
+SESSION = requests.Session()
+
+def polygon_ticker(symbol: str, asset_type: str) -> str:
+    if asset_type.lower() == "crypto":
         s = symbol.strip()
         return s if s.startswith("X:") else f"X:{s}"
     return symbol.strip()
-
-SESSION = requests.Session()
 
 def fetch_polygon_daily(polygon_symbol: str, start: str, end: str,
                         retries: int = 3, backoff: float = 1.0) -> pd.DataFrame:
@@ -96,11 +108,10 @@ def fetch_polygon_daily(polygon_symbol: str, start: str, end: str,
                 df = pd.DataFrame(data)
                 if df.empty:
                     return df
-                df["date"] = pd.to_datetime(df["t"], unit="ms")
+                df["date"] = pd.to_datetime(df["t"], unit="ms")  # naive UTC -> we normalize to date below
                 df = df.rename(columns={"o":"open","h":"high","l":"low","c":"close","v":"volume"})[
                     ["date","open","high","low","close","volume"]
                 ]
-                # clean
                 for c in ["open","high","low","close","volume"]:
                     df[c] = pd.to_numeric(df[c], errors="coerce")
                 df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=["close"])
@@ -113,26 +124,26 @@ def fetch_polygon_daily(polygon_symbol: str, start: str, end: str,
         time.sleep(backoff * (attempt + 1))
     return pd.DataFrame()
 
-# --- Collect data ---
+# ------------------ Collect data ------------------
 all_frames = []
 for i, row in symbol_meta.iterrows():
     symbol = str(row["symbol"]).strip()
     sector = row["sector"]
-    asset_type = row["asset_type"]
+    a_type = (row["asset_type"] or "stock").lower()
     if not symbol:
         continue
-    poly_ticker = to_polygon_ticker(symbol, asset_type)
-    print(f"📡 Fetching {symbol} ({asset_type}) → {poly_ticker}  ({i+1}/{len(symbol_meta)})...")
-    df_new = fetch_polygon_daily(poly_ticker, start_date, end_date)
+    pt = polygon_ticker(symbol, a_type)
+    print(f"📡 Fetching {symbol} ({a_type}) → {pt}  ({i+1}/{len(symbol_meta)})...")
+    df_new = fetch_polygon_daily(pt, start_str, end_str)
     if not df_new.empty:
-        # For storage, we keep symbol *without* 'X:' (consistent with stocks.csv you built)
+        # Store symbol without 'X:' prefix (consistent with stocks.csv)
         df_new["symbol"] = symbol
-        df_new["sector"] = sector if pd.notna(sector) else ("Crypto" if str(asset_type).lower()=="crypto" else None)
-        df_new["asset_type"] = asset_type if pd.notna(asset_type) else "stock"
+        df_new["sector"] = sector if pd.notna(sector) else ( "Crypto" if a_type == "crypto" else None )
+        df_new["asset_type"] = a_type
         all_frames.append(df_new)
-    time.sleep(0.2)  # gentle pacing
+    time.sleep(0.2)  # polite pacing
 
-# --- Overwrite-first merge (new rows win) ---
+# ------------------ Overwrite-first merge (new rows win) ------------------
 if not all_frames:
     print("\n⚠️ No new data fetched. File not changed.")
     raise SystemExit(0)
@@ -162,7 +173,7 @@ print(f"📊 Final total rows: {len(combined)}")
 combined.to_csv("stocks.csv", index=False)
 print("✅ stocks.csv written.")
 
-# --- Push to GitHub (only if changed) ---
+# ------------------ Push to GitHub (only if changed) ------------------
 try:
     subprocess.run(["git", "config", "user.name", "Auto Bot"], check=True)
     subprocess.run(["git", "config", "user.email", "bot@example.com"], check=True)
@@ -170,7 +181,8 @@ try:
 
     diff = subprocess.run(["git", "diff", "--cached", "--quiet"])
     if diff.returncode != 0:
-        subprocess.run(["git", "commit", "-m", f"🔄 Auto-update stocks+crypto @ {datetime.now()}"], check=True)
+        msg_scope = "stocks-only" if not INCLUDE_CRYPTO else "stocks+crypto"
+        subprocess.run(["git", "commit", "-m", f"🔄 Auto-update {msg_scope} @ {now_et:%Y-%m-%d %H:%M ET}"], check=True)
         subprocess.run(["git", "push"], check=True)
         print("🚀 Pushed update to GitHub.")
     else:
