@@ -19,8 +19,17 @@ st.title("📈 Smart Backtester")
 AUTO_MIN_TRADES = 3      # require at least this many trades at a threshold to consider it
 AUTO_GRID_STEP  = 0.05   # sweep step for threshold grid [0.00..1.00]
 
-# Polygon key (env or Streamlit secrets)
-POLYGON_KEY = st.secrets.get("POLYGON_API_KEY", os.getenv("POLYGON_API_KEY", ""))
+# --------------------------------------------------------------------------------------
+# Secrets/env helper
+# --------------------------------------------------------------------------------------
+def get_polygon_key() -> str:
+    """Get POLYGON_API_KEY from st.secrets or env, trimmed. Empty string if missing."""
+    key = ""
+    try:
+        key = st.secrets["POLYGON_API_KEY"]
+    except Exception:
+        key = os.getenv("POLYGON_API_KEY", "")
+    return (key or "").strip()
 
 # --------------------------------------------------------------------------------------
 # Helpers
@@ -55,9 +64,13 @@ def _log(msg: str):
     st.write(msg)
 
 def _polygon_get(url: str, params=None, timeout=30, max_retries=4):
-    assert POLYGON_KEY, "Missing POLYGON_API_KEY (env var or st.secrets)."
+    api_key = get_polygon_key()
+    if not api_key:
+        _log("⚠️ POLYGON_API_KEY not set; skipping request.")
+        return None
     params = (params or {}).copy()
-    params["apiKey"] = POLYGON_KEY
+    params["apiKey"] = api_key
+
     backoff = 2
     for attempt in range(1, max_retries + 1):
         try:
@@ -82,11 +95,7 @@ def fetch_polygon_daily(symbol: str, start: str, end: str, asset_type: str) -> p
     symbol: 'AAPL' for stocks, 'BTCUSD' (no 'X:' prefix) for crypto rows in stocks.csv
     asset_type: 'stock' or 'crypto'
     """
-    if asset_type == "crypto":
-        ticker = f"X:{symbol}"  # e.g., BTCUSD -> X:BTCUSD
-    else:
-        ticker = symbol         # e.g., AAPL
-
+    ticker = f"X:{symbol}" if asset_type == "crypto" else symbol
     url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}"
     r = _polygon_get(url, params={"adjusted": "true", "sort": "asc", "limit": 50000})
     if r is None or r.status_code != 200:
@@ -136,7 +145,7 @@ def simulate_oaat(
     starting_capital: float = 10000.0,
     alloc_pct: float = 100.0,
     *,
-    threshold: float = 0.50,       # keep only trades with garch_risk_index >= threshold
+    threshold: float = 0.50,
     require_garch: bool = True
 ):
     t = trades_in.copy().sort_values("entry_date")
@@ -317,7 +326,6 @@ def optimize_thresholds_per_symbol_closed(
 # Data loading + DAILY UPDATE (stocks + crypto)
 # --------------------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-@st.cache_data(show_spinner=False)
 def load_raw_prices() -> pd.DataFrame:
     df = pd.read_csv("stocks.csv", parse_dates=["date"])
 
@@ -339,22 +347,15 @@ def load_raw_prices() -> pd.DataFrame:
 
     return df
 
-
 def _yesterday_utc_date() -> pd.Timestamp:
     return (datetime.now(timezone.utc) - timedelta(days=1)).date()
-
-def _safe_min_date(d):
-    try:
-        return pd.to_datetime(d).date()
-    except Exception:
-        return None
 
 def update_prices_if_needed(df_existing: pd.DataFrame) -> pd.DataFrame:
     """
     Updates stocks.csv to include daily bars up to yesterday (UTC) for both stocks and crypto.
     Only fetches missing days per symbol. Writes to disk only if new rows exist.
     """
-    if POLYGON_KEY == "":
+    if not get_polygon_key():
         st.info("⚠️ POLYGON_API_KEY not set; skipping auto-update.")
         return df_existing
 
@@ -376,6 +377,7 @@ def update_prices_if_needed(df_existing: pd.DataFrame) -> pd.DataFrame:
             a_type = row["asset_type"]
             last = row["last_date"]
             if last is None:
+                prog.progress(min(1.0, (idx+1)/len(last_dates)))
                 continue
             start = (pd.Timestamp(last) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
             end   = pd.Timestamp(target_end).strftime("%Y-%m-%d")
@@ -412,14 +414,16 @@ def load_caps() -> pd.DataFrame:
     caps = pd.read_csv("market_cap.csv")
     return caps
 
-# Sidebar actions
+# Sidebar actions + key status
 st.sidebar.header("Data")
+st.sidebar.caption(f"Polygon key: {'✅ found' if get_polygon_key() else '❌ missing'}")
+
 if st.sidebar.button("🔄 Update data now"):
     # clear caches so we truly reload + update
     load_raw_prices.clear()
     df0 = load_raw_prices()
     df0 = update_prices_if_needed(df0)
-    st.experimental_rerun()
+    st.rerun()
 
 # Always try to update on app start (if needed)
 df0 = load_raw_prices()
@@ -641,7 +645,7 @@ if page == "Insights":
             win_rate=("win", "mean"),
         ).reset_index()
 
-        # Compounded total return % per symbol
+        # Compounded "Total Return %" per symbol across its closed trades
         def total_ret_percent(s: pd.Series) -> float:
             return (np.prod(1.0 + s.values/100.0) - 1.0) * 100.0
 
@@ -652,6 +656,7 @@ if page == "Insights":
                   .reset_index()
         )
 
+        # Avg win / loss
         win_mean = (closed[closed["pct_return"] > 0]
                     .groupby("symbol")["pct_return"].mean()
                     .rename("avg_win_return"))
@@ -659,12 +664,15 @@ if page == "Insights":
                      .groupby("symbol")["pct_return"].mean()
                      .rename("avg_loss_return"))
 
-        best = (agg.merge(win_mean, on="symbol", how="left")
-                    .merge(loss_mean, on="symbol", how="left")
-                    .merge(tot, on="symbol", how="left"))
+        best = (agg
+                .merge(win_mean, on="symbol", how="left")
+                .merge(loss_mean, on="symbol", how="left")
+                .merge(tot, on="symbol", how="left"))
 
         best["sector"] = best["symbol"].map(sector_map)
         best["symbol_display"] = best["symbol"].map(lambda s: f"{cap_emoji_map.get(s,'')} {s}")
+
+        # Sort by compounded Total Return %
         best = best.sort_values("total_return_%", ascending=False)
 
         disp = best.copy()
