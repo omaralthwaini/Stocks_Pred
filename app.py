@@ -415,19 +415,30 @@ def load_caps() -> pd.DataFrame:
     return caps
 
 # Sidebar actions + key status
+# Sidebar actions + key status
 st.sidebar.header("Data")
 st.sidebar.caption(f"Polygon key: {'✅ found' if get_polygon_key() else '❌ missing'}")
 
 if st.sidebar.button("🔄 Update data now"):
-    # clear caches so we truly reload + update
-    load_raw_prices.clear()
+    # Clear ALL st.cache_data (safe + version-proof)
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        st.cache_resource.clear()
+    except Exception:
+        pass
+
+    # Reload + update, then rerun
     df0 = load_raw_prices()
     df0 = update_prices_if_needed(df0)
-    st.rerun()
 
-# Always try to update on app start (if needed)
-df0 = load_raw_prices()
-df0 = update_prices_if_needed(df0)
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:  # older Streamlit
+        st.experimental_rerun()
+
 
 # --------------------------------------------------------------------------------------
 # Universe selection
