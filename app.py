@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 from arch import arch_model  # for GARCH
 from strategy import run_strategy
+import requests
 
 # --------------------------------------------------------------------------------------
 # App config
@@ -15,9 +16,12 @@ from strategy import run_strategy
 st.set_page_config(page_title="Smart Backtester", layout="wide")
 st.title("📈 Smart Backtester")
 
+# Toggle crypto usage in the app (kept False since your subscription excludes it)
+INCLUDE_CRYPTO = False
+
 # Auto threshold settings (global, always on)
-AUTO_MIN_TRADES = 3      # require at least this many trades at a threshold to consider it
-AUTO_GRID_STEP  = 0.05   # sweep step for threshold grid [0.00..1.00]
+AUTO_MIN_TRADES = 3
+AUTO_GRID_STEP  = 0.05
 
 # --------------------------------------------------------------------------------------
 # Secrets/env helper
@@ -58,8 +62,6 @@ def date_only_cols(df_in, cols=("entry_date","exit_date")):
 # --------------------------------------------------------------------------------------
 # Light Polygon client (daily OHLCV)
 # --------------------------------------------------------------------------------------
-import requests
-
 def _log(msg: str):
     st.write(msg)
 
@@ -92,7 +94,7 @@ def _polygon_get(url: str, params=None, timeout=30, max_retries=4):
 
 def fetch_polygon_daily(symbol: str, start: str, end: str, asset_type: str) -> pd.DataFrame:
     """
-    symbol: 'AAPL' for stocks, 'BTCUSD' (no 'X:' prefix) for crypto rows in stocks.csv
+    symbol: 'AAPL' for stocks, 'BTCUSD' for crypto rows in stocks.csv (not used when INCLUDE_CRYPTO=False)
     asset_type: 'stock' or 'crypto'
     """
     ticker = f"X:{symbol}" if asset_type == "crypto" else symbol
@@ -117,7 +119,7 @@ def fetch_polygon_daily(symbol: str, start: str, end: str, asset_type: str) -> p
 def garch_volatility_forecast(series: pd.Series) -> float | None:
     """
     GARCH(1,1) on decimal log-returns (mean='Zero', dist='t').
-    Returns 1D-ahead **annualized** volatility in DECIMAL units (e.g., 0.22 = 22%).
+    Returns 1D-ahead annualized volatility in DECIMAL units (e.g., 0.22 = 22%).
     """
     px = pd.Series(series).astype(float)
     px = px.replace([np.inf, -np.inf], np.nan).dropna()
@@ -130,7 +132,7 @@ def garch_volatility_forecast(series: pd.Series) -> float | None:
         res = am.fit(disp='off')
         fc = res.forecast(horizon=1, reindex=False)
         var1 = float(fc.variance.iloc[-1, 0])
-        ann_vol = float(np.sqrt(var1) * np.sqrt(252))  # decimal
+        ann_vol = float(np.sqrt(var1) * np.sqrt(252))
         return ann_vol if np.isfinite(ann_vol) and ann_vol > 0 else None
     except Exception:
         return None
@@ -241,9 +243,8 @@ def attach_garch_risk_index(df_prices: pd.DataFrame,
                             base_vol_dec: float = 0.20,
                             lookback: int | None = 252) -> pd.DataFrame:
     """
-    Adds one column per trade:
-      • garch_risk_index ∈ (0,1], where LOWER = riskier; min(1, base_vol / ann_vol).
-    Uses price history strictly before each entry_date, optionally capped by lookback.
+    Adds garch_risk_index ∈ (0,1], min(1, base_vol / ann_vol), using price history strictly
+    before each entry_date, optionally capped by lookback.
     """
     df_sorted = df_prices.sort_values(["symbol", "date"])
     groups = {sym: g[["date","close"]].reset_index(drop=True)
@@ -282,13 +283,14 @@ def optimize_thresholds_per_symbol_closed(
 ) -> tuple[dict, pd.DataFrame]:
     """
     For each symbol, sweep thresholds in [0,1] (step=step) on CLOSED trades only,
-    simulate OAAT, and select the threshold that maximizes total return, with
-    at least min_trades at that threshold. Tie-breakers: more trades, then lower thr.
+    simulate OAAT, and select the threshold that maximizes total return,
+    with at least min_trades at that threshold. Tie-breakers: more trades, then lower thr.
     """
     closed = trades_all[trades_all["exit_date"].notna()].copy()
     if closed.empty:
         sym_set = sorted(trades_all["symbol"].unique())
-        return ({s: 0.00 for s in sym_set}, pd.DataFrame(columns=["symbol","threshold","trades","total_return_%","win_rate_%"]))
+        return ({s: 0.00 for s in sym_set},
+                pd.DataFrame(columns=["symbol","threshold","trades","total_return_%","win_rate_%"]))
 
     start_ts = closed["entry_date"].min()
     end_ts   = closed["exit_date"].max()
@@ -323,184 +325,155 @@ def optimize_thresholds_per_symbol_closed(
     return best_map, pd.DataFrame(rows)
 
 # --------------------------------------------------------------------------------------
-# Data loading + DAILY UPDATE (stocks + crypto)
+# Load prices (from file only on app start)
 # --------------------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_raw_prices() -> pd.DataFrame:
     df = pd.read_csv("stocks.csv", parse_dates=["date"])
 
-    # Ensure asset_type exists (default everything to 'stock' if missing)
+    # Ensure required columns exist
     if "asset_type" not in df.columns:
         df["asset_type"] = "stock"
-
-    # Ensure sector column exists
     if "sector" not in df.columns:
         df["sector"] = None
 
-    # Normalize asset_type and fill sector for crypto rows only
+    # Normalize asset_type + sector
     df["asset_type"] = df["asset_type"].astype(str).str.lower()
-    mask_crypto = df["asset_type"].eq("crypto")
-
-    # Make sure 'sector' is string-capable, then fill NA/blank for crypto rows
-    df["sector"] = df["sector"].astype("object")
-    df.loc[mask_crypto & (df["sector"].isna() | (df["sector"].astype(str).str.strip() == "")), "sector"] = "Crypto"
+    if INCLUDE_CRYPTO:
+        mask_crypto = df["asset_type"].eq("crypto")
+        df["sector"] = df["sector"].astype("object")
+        df.loc[mask_crypto & (df["sector"].isna() | (df["sector"].astype(str).str.strip() == "")), "sector"] = "Crypto"
+    else:
+        # If crypto exists in file but you don't want to use it, keep rows but mark sector consistently
+        df.loc[df["asset_type"].eq("crypto") & df["sector"].isna(), "sector"] = "Crypto"
 
     return df
 
-# ===================== Data update helpers (replace your current version) =====================
-def _yesterday_utc_date() -> pd.Timestamp:
-    return (datetime.now(timezone.utc) - timedelta(days=1)).date()
+# --------------------------------------------------------------------------------------
+# Manual "update today" (overwrite today's rows)
+# --------------------------------------------------------------------------------------
+def _today_str():
+    # Use calendar date (naive). If you prefer ET: from datetime import timezone; convert.
+    return datetime.now().strftime("%Y-%m-%d")
 
-def update_prices_if_needed(df_existing: pd.DataFrame) -> pd.DataFrame:
+def update_prices_today(df_existing: pd.DataFrame,
+                        include_crypto: bool = INCLUDE_CRYPTO) -> pd.DataFrame:
     """
-    Update stocks.csv to include daily bars up to yesterday (UTC) for both stocks and crypto.
-    Only fetches missing days per symbol. Writes to disk only if new rows exist.
+    Fetch today's daily bar for each symbol (stocks; crypto optional),
+    overwrite any existing (symbol, today) rows in stocks.csv, and return the combined df.
     """
-    # Read the key at call-time (supports st.secrets or env var)
+    if df_existing.empty or "symbol" not in df_existing.columns or "date" not in df_existing.columns:
+        st.error("stocks.csv is missing required columns.")
+        return df_existing
+
     if not get_polygon_key():
-        st.info("⚠️ POLYGON_API_KEY not set; skipping auto-update.")
+        st.error("POLYGON_API_KEY not set; cannot update.")
         return df_existing
 
-    if df_existing.empty or "date" not in df_existing.columns:
-        st.warning("Existing price file is empty or missing 'date'; skipping auto-update.")
+    # Build symbol meta (symbol, asset_type, sector)
+    meta = (df_existing[["symbol","asset_type","sector"]]
+            .drop_duplicates()
+            .reset_index(drop=True))
+    if not include_crypto:
+        meta = meta[meta["asset_type"].str.lower() != "crypto"]
+
+    if meta.empty:
+        st.warning("No symbols to update.")
         return df_existing
 
-    target_end = _yesterday_utc_date()
-    try:
-        max_date = df_existing["date"].dt.date.max()
-    except Exception:
-        # normalize if needed
-        df_existing["date"] = pd.to_datetime(df_existing["date"], errors="coerce")
-        max_date = df_existing["date"].dt.date.max()
+    start = end = _today_str()
+    frames = []
 
-    # Already up-to-date
-    if pd.notna(max_date) and max_date >= target_end:
-        return df_existing
-
-    # Build last-date map per (symbol, asset_type)
-    last_dates = (
-        df_existing.groupby(["symbol", "asset_type"], dropna=False)["date"]
-        .max()
-        .dt.date
-        .reset_index()
-        .rename(columns={"date": "last_date"})
-    )
-
-    new_frames = []
-    with st.spinner("🔄 Updating daily prices to yesterday…"):
-        prog = st.progress(0.0)
-        total = len(last_dates)
-        for idx, row in last_dates.iterrows():
+    with st.spinner(f"🔄 Fetching today's bars ({start})…"):
+        for i, row in meta.iterrows():
             sym = str(row["symbol"]).strip()
-            a_type = str(row["asset_type"]).strip().lower() if pd.notna(row["asset_type"]) else "stock"
-            last = row["last_date"]
-            if not sym or pd.isna(last):
-                prog.progress(min(1.0, (idx + 1) / max(1, total)))
+            a_type = (row["asset_type"] or "stock").lower()
+            if not sym:
                 continue
-
-            start = (pd.Timestamp(last) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-            end   = pd.Timestamp(target_end).strftime("%Y-%m-%d")
-            if start > end:
-                prog.progress(min(1.0, (idx + 1) / max(1, total)))
-                continue
-
-            st.write(f"📡 Fetching {sym} [{a_type}] {start} → {end}")
             df_new = fetch_polygon_daily(sym, start, end, a_type)
-            if not df_new.empty:
-                # carry forward metadata (sector, asset_type)
-                # take the most recent row for this symbol to copy sector
-                last_meta_row = (
-                    df_existing[df_existing["symbol"] == sym]
-                    .sort_values("date")
-                    .iloc[-1]
-                )
-                df_new["asset_type"] = a_type
-                df_new["sector"] = last_meta_row.get("sector", None)
-                new_frames.append(df_new)
+            if df_new.empty:
+                continue
+            # Attach metadata for storage
+            df_new["symbol"] = sym
+            df_new["asset_type"] = a_type
+            df_new["sector"] = row.get("sector", None)
+            frames.append(df_new)
 
-            prog.progress(min(1.0, (idx + 1) / max(1, total)))
-
-    if not new_frames:
-        st.success("✅ Prices already up-to-date.")
+    if not frames:
+        st.info("No new data returned by Polygon for today. File not changed.")
         return df_existing
 
-    df_new_all = pd.concat(new_frames, ignore_index=True)
-    # Normalize to naive datetime just in case
-    df_new_all["date"] = pd.to_datetime(df_new_all["date"], errors="coerce")
+    new_data = pd.concat(frames, ignore_index=True)
 
-    combined = pd.concat([df_existing, df_new_all], ignore_index=True)
-    combined = (
-        combined.drop_duplicates(subset=["symbol", "date"], keep="last")
-        .sort_values(["symbol", "date"])
-        .reset_index(drop=True)
-    )
+    # Normalize datetimes to date for keying
+    new_data["date"] = pd.to_datetime(new_data["date"]).dt.normalize()
+    df_existing["date"] = pd.to_datetime(df_existing["date"]).dt.normalize()
+
+    # Remove collisions for (symbol, date) present in new_data (i.e., overwrite today's rows)
+    keys = new_data[["symbol","date"]].drop_duplicates()
+    before = len(df_existing)
+    merged = df_existing.merge(keys, on=["symbol","date"], how="left", indicator=True)
+    existing_filtered = merged[merged["_merge"] == "left_only"].drop(columns="_merge")
+    dropped = before - len(existing_filtered)
+
+    combined = pd.concat([new_data, existing_filtered], ignore_index=True)
+    combined = (combined
+                .drop_duplicates(subset=["symbol","date"], keep="first")
+                .sort_values(["symbol","date"])
+                .reset_index(drop=True))
     combined.to_csv("stocks.csv", index=False)
-    st.success(f"✅ Updated stocks.csv with {len(df_new_all):,} new rows.")
+
+    st.success(f"✅ Updated stocks.csv for today. Overwrote {dropped} rows; added {len(new_data)} new rows.")
     return combined
 
-
-# ===================== Sidebar + safe bootstrapping (replace your current sidebar block) =====================
-def bootstrap_prices() -> pd.DataFrame:
-    """Load cached prices, try to update, and guarantee required columns."""
-    df = load_raw_prices()  # <-- your cached loader defined earlier
-    try:
-        df = update_prices_if_needed(df)
-    except Exception as e:
-        st.warning(f"Auto-update failed: {e}. Using cached data.")
-    # Guarantee required columns exist
-    if "asset_type" not in df.columns:
-        df["asset_type"] = "stock"
-    if "sector" not in df.columns:
-        df["sector"] = None
-    return df
-
+# --------------------------------------------------------------------------------------
+# Sidebar: no auto-update on load; manual update overwrites today's rows
+# --------------------------------------------------------------------------------------
 st.sidebar.header("Data")
 st.sidebar.caption(f"Polygon key: {'✅ found' if get_polygon_key() else '❌ missing'}")
 
+# Load current file (only)
+df0 = load_raw_prices()
+
 if st.sidebar.button("🔄 Update data now"):
-    # Clear caches so we truly reload + update
     try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-    try:
-        st.cache_resource.clear()
-    except Exception:
-        pass
+        _ = update_prices_today(df0, include_crypto=INCLUDE_CRYPTO)
+        # Clear caches and rerun so the rest of the app picks up the saved file
+        try: st.cache_data.clear()
+        except Exception: pass
+        try: st.cache_resource.clear()
+        except Exception: pass
+        if hasattr(st, "rerun"):
+            st.rerun()
+        else:
+            st.experimental_rerun()
+    except Exception as e:
+        st.error(f"Update failed: {e}")
 
-    # Do a fresh load+update, then rerun the app
-    _ = bootstrap_prices()
-    if hasattr(st, "rerun"):
-        st.rerun()
-    else:
-        st.experimental_rerun()
-
-# Always define df0 BEFORE any downstream use
-df0 = bootstrap_prices()
-
-
+# --------------------------------------------------------------------------------------
+# Market caps (for stock universe)
+# --------------------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_caps() -> pd.DataFrame:
     caps = pd.read_csv("market_cap.csv")
     return caps
 
+caps = load_caps()
 
 # --------------------------------------------------------------------------------------
 # Universe selection
-#   - For stocks: filter by market_cap (remove cap 3 & 4, then take top 100 by cap_score)
-#   - For crypto: keep ALL crypto symbols
+#   - Stocks: filter by market_cap (remove cap 3 & 4, then take top 100 by cap_score)
+#   - Crypto: skipped unless INCLUDE_CRYPTO=True
 # --------------------------------------------------------------------------------------
-caps = load_caps()
-# cap info only applies to stocks; crypto may not appear in caps
 stocks_only = df0[df0["asset_type"] == "stock"].copy()
-crypto_only = df0[df0["asset_type"] == "crypto"].copy()
-
-# restrict stocks to top 100 by cap_score excluding 3 & 4
 stocks_caps = caps[~caps["cap_score"].isin([3, 4])].sort_values("cap_score")
 top_stock_symbols = stocks_caps.head(100)["symbol"].unique().tolist()
 
-# keep all crypto symbols present
-crypto_symbols = crypto_only["symbol"].unique().tolist()
+if INCLUDE_CRYPTO:
+    crypto_only = df0[df0["asset_type"] == "crypto"].copy()
+    crypto_symbols = crypto_only["symbol"].unique().tolist()
+else:
+    crypto_symbols = []
 
 final_symbols = set(top_stock_symbols) | set(crypto_symbols)
 df = df0[df0["symbol"].isin(final_symbols)].copy().sort_values(["symbol","date"])
@@ -543,7 +516,8 @@ with st.expander("Per-symbol auto thresholds (learned on CLOSED trades)"):
     ).sort_values(["auto_threshold","symbol"])
     st.dataframe(thr_df, use_container_width=True, hide_index=True)
 
-with st.expander("Threshold sweep results (per symbol)"):
+with st.expander("Threshold sweep results (per symbol)"):\
+
     if not sweep_long.empty:
         st.dataframe(sweep_long.sort_values(["symbol","threshold"]),
                      use_container_width=True, hide_index=True)
@@ -688,12 +662,10 @@ if page == "Insights":
     if closed.empty:
         st.info("No closed trades to analyze.")
     else:
-        # Per-trade realized P/L %
         closed["pct_return"] = (closed["exit_price"] / closed["entry"] - 1) * 100
         closed["win"] = closed["pct_return"] > 0
         closed["days_held"] = (closed["exit_date"] - closed["entry_date"]).dt.days
 
-        # Core aggregates per symbol
         agg = closed.groupby("symbol").agg(
             n_trades=("pct_return", "size"),
             avg_return=("pct_return", "mean"),
@@ -701,7 +673,6 @@ if page == "Insights":
             win_rate=("win", "mean"),
         ).reset_index()
 
-        # Compounded "Total Return %" per symbol across its closed trades
         def total_ret_percent(s: pd.Series) -> float:
             return (np.prod(1.0 + s.values/100.0) - 1.0) * 100.0
 
@@ -712,7 +683,6 @@ if page == "Insights":
                   .reset_index()
         )
 
-        # Avg win / loss
         win_mean = (closed[closed["pct_return"] > 0]
                     .groupby("symbol")["pct_return"].mean()
                     .rename("avg_win_return"))
@@ -728,7 +698,6 @@ if page == "Insights":
         best["sector"] = best["symbol"].map(sector_map)
         best["symbol_display"] = best["symbol"].map(lambda s: f"{cap_emoji_map.get(s,'')} {s}")
 
-        # Sort by compounded Total Return %
         best = best.sort_values("total_return_%", ascending=False)
 
         disp = best.copy()
