@@ -347,67 +347,137 @@ def load_raw_prices() -> pd.DataFrame:
 
     return df
 
+# ===================== Data update helpers (replace your current version) =====================
 def _yesterday_utc_date() -> pd.Timestamp:
     return (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
 def update_prices_if_needed(df_existing: pd.DataFrame) -> pd.DataFrame:
     """
-    Updates stocks.csv to include daily bars up to yesterday (UTC) for both stocks and crypto.
+    Update stocks.csv to include daily bars up to yesterday (UTC) for both stocks and crypto.
     Only fetches missing days per symbol. Writes to disk only if new rows exist.
     """
+    # Read the key at call-time (supports st.secrets or env var)
     if not get_polygon_key():
         st.info("⚠️ POLYGON_API_KEY not set; skipping auto-update.")
         return df_existing
 
-    target_end = _yesterday_utc_date()
-    if df_existing["date"].dt.date.max() >= target_end:
-        return df_existing  # already up-to-date
+    if df_existing.empty or "date" not in df_existing.columns:
+        st.warning("Existing price file is empty or missing 'date'; skipping auto-update.")
+        return df_existing
 
-    # Build last-date map per symbol
+    target_end = _yesterday_utc_date()
+    try:
+        max_date = df_existing["date"].dt.date.max()
+    except Exception:
+        # normalize if needed
+        df_existing["date"] = pd.to_datetime(df_existing["date"], errors="coerce")
+        max_date = df_existing["date"].dt.date.max()
+
+    # Already up-to-date
+    if pd.notna(max_date) and max_date >= target_end:
+        return df_existing
+
+    # Build last-date map per (symbol, asset_type)
     last_dates = (
-        df_existing.groupby(["symbol","asset_type"])["date"]
-        .max().dt.date.reset_index().rename(columns={"date":"last_date"})
+        df_existing.groupby(["symbol", "asset_type"], dropna=False)["date"]
+        .max()
+        .dt.date
+        .reset_index()
+        .rename(columns={"date": "last_date"})
     )
 
     new_frames = []
     with st.spinner("🔄 Updating daily prices to yesterday…"):
         prog = st.progress(0.0)
+        total = len(last_dates)
         for idx, row in last_dates.iterrows():
-            sym = row["symbol"]
-            a_type = row["asset_type"]
+            sym = str(row["symbol"]).strip()
+            a_type = str(row["asset_type"]).strip().lower() if pd.notna(row["asset_type"]) else "stock"
             last = row["last_date"]
-            if last is None:
-                prog.progress(min(1.0, (idx+1)/len(last_dates)))
+            if not sym or pd.isna(last):
+                prog.progress(min(1.0, (idx + 1) / max(1, total)))
                 continue
+
             start = (pd.Timestamp(last) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
             end   = pd.Timestamp(target_end).strftime("%Y-%m-%d")
             if start > end:
-                prog.progress(min(1.0, (idx+1)/len(last_dates)))
+                prog.progress(min(1.0, (idx + 1) / max(1, total)))
                 continue
 
             st.write(f"📡 Fetching {sym} [{a_type}] {start} → {end}")
             df_new = fetch_polygon_daily(sym, start, end, a_type)
             if not df_new.empty:
                 # carry forward metadata (sector, asset_type)
-                meta = df_existing.loc[df_existing["symbol"] == sym].iloc[-1]
+                # take the most recent row for this symbol to copy sector
+                last_meta_row = (
+                    df_existing[df_existing["symbol"] == sym]
+                    .sort_values("date")
+                    .iloc[-1]
+                )
                 df_new["asset_type"] = a_type
-                df_new["sector"] = meta.get("sector", None)
+                df_new["sector"] = last_meta_row.get("sector", None)
                 new_frames.append(df_new)
-            prog.progress(min(1.0, (idx+1)/len(last_dates)))
+
+            prog.progress(min(1.0, (idx + 1) / max(1, total)))
 
     if not new_frames:
         st.success("✅ Prices already up-to-date.")
         return df_existing
 
     df_new_all = pd.concat(new_frames, ignore_index=True)
+    # Normalize to naive datetime just in case
+    df_new_all["date"] = pd.to_datetime(df_new_all["date"], errors="coerce")
+
     combined = pd.concat([df_existing, df_new_all], ignore_index=True)
-    combined = (combined
-                .drop_duplicates(subset=["symbol","date"])
-                .sort_values(["symbol","date"])
-                .reset_index(drop=True))
+    combined = (
+        combined.drop_duplicates(subset=["symbol", "date"], keep="last")
+        .sort_values(["symbol", "date"])
+        .reset_index(drop=True)
+    )
     combined.to_csv("stocks.csv", index=False)
     st.success(f"✅ Updated stocks.csv with {len(df_new_all):,} new rows.")
     return combined
+
+
+# ===================== Sidebar + safe bootstrapping (replace your current sidebar block) =====================
+def bootstrap_prices() -> pd.DataFrame:
+    """Load cached prices, try to update, and guarantee required columns."""
+    df = load_raw_prices()  # <-- your cached loader defined earlier
+    try:
+        df = update_prices_if_needed(df)
+    except Exception as e:
+        st.warning(f"Auto-update failed: {e}. Using cached data.")
+    # Guarantee required columns exist
+    if "asset_type" not in df.columns:
+        df["asset_type"] = "stock"
+    if "sector" not in df.columns:
+        df["sector"] = None
+    return df
+
+st.sidebar.header("Data")
+st.sidebar.caption(f"Polygon key: {'✅ found' if get_polygon_key() else '❌ missing'}")
+
+if st.sidebar.button("🔄 Update data now"):
+    # Clear caches so we truly reload + update
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        st.cache_resource.clear()
+    except Exception:
+        pass
+
+    # Do a fresh load+update, then rerun the app
+    _ = bootstrap_prices()
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
+# Always define df0 BEFORE any downstream use
+df0 = bootstrap_prices()
+
 
 @st.cache_data(show_spinner=False)
 def load_caps() -> pd.DataFrame:
