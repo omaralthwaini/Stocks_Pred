@@ -29,6 +29,26 @@ def date_only(s):
     except Exception:
         return "—"
 
+# Shared page styles (HTML)
+PAGE_CSS = """
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  .kpis { display:flex; gap:12px; flex-wrap:wrap; margin: 8px 0 14px; }
+  .chip { border:1px solid #eee; border-radius:8px; padding:8px 10px; background:#fafafa; }
+  h2 { margin: 18px 0 10px; font-size: 18px; }
+  h3 { margin: 16px 0 8px; font-size: 16px; }
+  .muted { color:#666; }
+  .foot { color:#888; font-size:12px; margin-top:14px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; }
+  th, td { text-align: left; padding: 8px; font-size: 13px; }
+  thead th { border-bottom: 2px solid #ddd; background:#f6f8fa; }
+  tbody tr { border-bottom: 1px solid #eee; }
+  .pos { color: #0a7a0a; font-weight: 600; }
+  .neg { color: #c23232; font-weight: 600; }
+</style>
+"""
+
 # ==============================
 # Email helpers
 # ==============================
@@ -169,92 +189,69 @@ def optimize_thresholds_per_symbol_closed(
     return best_map, pd.DataFrame(rows)
 
 # ==============================
-# HTML rendering (Open Trades table)
+# HTML rendering helpers
 # ==============================
+def render_table(df: pd.DataFrame, cols: list[str], headers: list[str]) -> str:
+    if df.empty:
+        return '<p class="muted">None today.</p>'
+    thead = "<thead><tr>" + "".join(f"<th>{h}</th>" for h in headers) + "</tr></thead>"
+    body = []
+    for _, r in df.iterrows():
+        cells = []
+        for c in cols:
+            val = r.get(c)
+            if c in ("entry", "exit_price", "stop_loss", "exit_or_last"):
+                cells.append(fmt_money(val))
+            elif c in ("pct_return", "unrealized_pct_return", "avg_return", "avg_win_return"):
+                cls = "pos" if (pd.notna(val) and val > 0) else "neg" if (pd.notna(val) and val < 0) else "muted"
+                cells.append(f'<span class="{cls}">{fmt_pct_signed(val)}</span>')
+            elif c == "win_rate":
+                cells.append("—" if pd.isna(val) else fmt_pct_plain(val*100, 0))
+            elif c in ("entry_date", "exit_date"):
+                cells.append(date_only(val))
+            else:
+                cells.append("—" if pd.isna(val) else str(val))
+        body.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+    return "<table>" + thead + "<tbody>" + "".join(body) + "</tbody></table>"
+
 def open_trades_table_html(open_trades: pd.DataFrame) -> str:
-    styles = """
-      <style>
-        body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-        .wrap { max-width: 980px; margin: 0 auto; }
-        .kpis { display:flex; gap:12px; flex-wrap:wrap; margin: 8px 0 14px; }
-        .chip { border:1px solid #eee; border-radius:8px; padding:8px 10px; background:#fafafa; }
-        table { border-collapse: collapse; width: 100%; }
-        th, td { text-align: left; padding: 8px; font-size: 13px; }
-        thead th { border-bottom: 2px solid #ddd; background:#f6f8fa; }
-        tbody tr { border-bottom: 1px solid #eee; }
-        .pos { color: #0a7a0a; font-weight: 600; }
-        .neg { color: #c23232; font-weight: 600; }
-        .muted { color:#666; }
-        h2 { margin: 18px 0 8px; font-size: 18px; }
-        h3 { margin: 12px 0 6px; font-size: 16px; }
-        .foot { color:#888; font-size:12px; margin-top:14px; }
-      </style>
-    """
     cols = ["symbol_display","sector","entry_date","entry","stop_loss",
             "avg_return","avg_win_return","win_rate","unrealized_pct_return"]
     headers = ["Symbol","Sector","Entry Date","Entry","Stop Loss",
                "Avg Return","Avg Win","Win Rate","Unrealized"]
+    return render_table(open_trades[cols], cols, headers) if not open_trades.empty else '<p class="muted">No open trades.</p>'
 
-    thead = "<thead><tr>" + "".join(f"<th>{h}</th>" for h in headers) + "</tr></thead>"
-    body_rows = []
-    for _, r in open_trades.iterrows():
-        symbol = r.get("symbol_display", r.get("symbol","—"))
-        sector = r.get("sector", "—")
-        edate  = date_only(r.get("entry_date"))
-        entry  = fmt_money(r.get("entry"))
-        sl     = fmt_money(r.get("stop_loss"))
-        a_ret  = r.get("avg_return")
-        a_win  = r.get("avg_win_return")
-        wr     = r.get("win_rate")  # 0..1
-        unrl   = r.get("unrealized_pct_return")
+def entries_today_table_html(entries_today: pd.DataFrame) -> str:
+    cols = ["symbol_display","sector","entry_date","entry","stop_loss"]
+    headers = ["Symbol","Sector","Entry Date","Entry","Stop Loss"]
+    return render_table(entries_today[cols], cols, headers)
 
-        def pct_cell(val, signed=True):
-            if pd.isna(val): return '<span class="muted">—</span>'
-            cls = "pos" if val > 0 else "neg" if val < 0 else "muted"
-            txt = fmt_pct_signed(val) if signed else fmt_pct_plain(val*100, 0)
-            return f'<span class="{cls}">{txt}</span>'
-
-        cells = [
-            symbol,
-            sector,
-            edate,
-            entry,
-            sl,
-            pct_cell(a_ret),
-            pct_cell(a_win),
-            "—" if pd.isna(wr) else fmt_pct_plain(wr*100, 0),
-            pct_cell(unrl)
-        ]
-        body_rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
-    tbody = "<tbody>" + "".join(body_rows) + "</tbody>"
-    return styles + f"<table>{thead}{tbody}</table>"
+def exits_today_table_html(exits_today: pd.DataFrame) -> str:
+    cols = ["symbol_display","sector","entry_date","exit_date","entry","exit_price","pct_return"]
+    headers = ["Symbol","Sector","Entry Date","Exit Date","Entry","Exit","P&L %"]
+    return render_table(exits_today[cols], cols, headers)
 
 # ==============================
 # Core: build snapshot then email
 # ==============================
 if __name__ == "__main__":
-    # Load prices (stocks + crypto) and caps
+    # Load prices & caps
     df0 = pd.read_csv("stocks.csv", parse_dates=["date"])
     if "asset_type" not in df0.columns:
         df0["asset_type"] = "stock"
     if "sector" not in df0.columns:
         df0["sector"] = None
     df0["asset_type"] = df0["asset_type"].astype(str).str.lower()
-    # Ensure crypto rows have sector
     df0.loc[(df0["asset_type"]=="crypto") & (df0["sector"].isna()), "sector"] = "Crypto"
 
     caps = pd.read_csv("market_cap.csv")
 
-    # Universe selection (same as app):
-    #  - Stocks: exclude cap_score 3 & 4, then top 100 by cap_score
-    #  - Crypto: keep ALL crypto symbols
+    # Universe selection (same as app)
     stocks_only = df0[df0["asset_type"] == "stock"].copy()
     crypto_only = df0[df0["asset_type"] == "crypto"].copy()
-
     stocks_caps = caps[~caps["cap_score"].isin([3, 4])].sort_values("cap_score")
     top_stock_symbols = stocks_caps.head(100)["symbol"].unique().tolist()
     crypto_symbols = crypto_only["symbol"].unique().tolist()
-
     final_symbols = set(top_stock_symbols) | set(crypto_symbols)
     df = (df0[df0["symbol"].isin(final_symbols)]
              .copy()
@@ -265,33 +262,29 @@ if __name__ == "__main__":
 
     # Strategy → Trades
     trades_raw = run_strategy(df)
+    et = datetime.now(pytz.timezone("US/Eastern"))
+    trading_day = et.date()
+
     if trades_raw.empty:
-        # still send a "no trades" email
-        et = datetime.now(pytz.timezone("US/Eastern"))
-        subject = f"📊 Trades — {et.date()} | No trades detected"
-        send_email(subject, "No trades detected.", "<p>No trades detected.</p>")
+        subject = f"📊 Signals — {trading_day} • 0 entries • 0 exits • 0 open"
+        body_text = f"No trades or signals detected on {trading_day}."
+        body_html = PAGE_CSS + f'<div class="wrap"><h2>No trades or signals — {trading_day}</h2></div>'
+        send_email(subject, body_text, body_html)
         raise SystemExit(0)
 
-    # Attach GARCH & learn per-symbol thresholds from CLOSED trades; keep >= thr
+    # Attach GARCH & auto-threshold filter (same as app)
     trades_all = attach_garch_risk_index(df, trades_raw, base_vol_dec=0.20, lookback=252)
     AUTO_MIN_TRADES = 3
     AUTO_GRID_STEP  = 0.05
     thr_map, _ = optimize_thresholds_per_symbol_closed(
         trades_all, step=AUTO_GRID_STEP, min_trades=AUTO_MIN_TRADES
     )
-
     def _accept_row(r):
         thr = thr_map.get(r["symbol"], 0.00)
         return pd.notna(r["garch_risk_index"]) and (r["garch_risk_index"] >= thr)
-
     trades = trades_all[trades_all.apply(_accept_row, axis=1)].copy()
-    if trades.empty:
-        et = datetime.now(pytz.timezone("US/Eastern"))
-        subject = f"📊 Trades — {et.date()} | All filtered by thresholds"
-        send_email(subject, "All trades were filtered out by thresholds.", "<p>All trades were filtered out by thresholds.</p>")
-        raise SystemExit(0)
 
-    # Enrich (same as app)
+    # Enrich
     sector_map = df[["symbol","sector"]].drop_duplicates().set_index("symbol")["sector"]
     trades["sector"] = trades["symbol"].map(sector_map)
     trades["cap_score"] = trades["symbol"].map(cap_score_map)
@@ -300,12 +293,12 @@ if __name__ == "__main__":
         lambda r: f"{r['cap_emoji']} {r['symbol']}" if pd.notna(r["cap_emoji"]) else r["symbol"], axis=1
     )
 
-    # Stop loss = yesterday's low at entry-date reference
+    # Stop loss ref = yesterday's low at entry-date
     df["stop_loss"] = df.groupby("symbol")["low"].shift(1)
     entry_lows = df[["symbol","date","stop_loss"]].rename(columns={"date":"entry_date"})
     trades = trades.merge(entry_lows, on=["symbol","entry_date"], how="left")
 
-    # Latest close, returns
+    # Latest close & returns
     latest_prices = df.groupby("symbol", as_index=False).agg(latest_close=("close","last"))
     trades = trades.merge(latest_prices, on="symbol", how="left")
     trades["pct_return"] = (trades["exit_price"] / trades["entry"] - 1) * 100
@@ -315,15 +308,15 @@ if __name__ == "__main__":
     )
 
     # Closed perf aggregates (avg_return / avg_win / win_rate)
-    closed = trades[trades["exit_date"].notna()].copy()
-    if not closed.empty:
-        closed["pct_return"] = (closed["exit_price"] / closed["entry"] - 1) * 100
-        closed["win"] = closed["pct_return"] > 0
-        avg_return = closed.groupby("symbol")["pct_return"].mean().rename("avg_return")
-        avg_win_return = (closed[closed["pct_return"] > 0]
+    closed_hist = trades[trades["exit_date"].notna()].copy()
+    if not closed_hist.empty:
+        closed_hist["pct_return"] = (closed_hist["exit_price"] / closed_hist["entry"] - 1) * 100
+        closed_hist["win"] = closed_hist["pct_return"] > 0
+        avg_return = closed_hist.groupby("symbol")["pct_return"].mean().rename("avg_return")
+        avg_win_return = (closed_hist[closed_hist["pct_return"] > 0]
                           .groupby("symbol")["pct_return"].mean()
                           .rename("avg_win_return"))
-        win_rate = closed.groupby("symbol")["win"].mean().rename("win_rate")
+        win_rate = closed_hist.groupby("symbol")["win"].mean().rename("win_rate")
         trades = (trades
                   .merge(avg_return, on="symbol", how="left")
                   .merge(avg_win_return, on="symbol", how="left")
@@ -333,14 +326,28 @@ if __name__ == "__main__":
         trades["avg_win_return"] = None
         trades["win_rate"] = None
 
-    # Open trades snapshot (like the Home page)
+    # --------------------------
+    # Split into sections (today)
+    # --------------------------
+    # Normalize dates to date() for comparison
+    trades["entry_date"] = pd.to_datetime(trades["entry_date"], errors="coerce")
+    trades["exit_date"]  = pd.to_datetime(trades["exit_date"], errors="coerce")
+
+    entries_today = trades[trades["entry_date"].dt.date == trading_day].copy()
+    exits_today   = trades[trades["exit_date"].notna() & (trades["exit_date"].dt.date == trading_day)].copy()
+
+    # Days held for exits section
+    if not exits_today.empty:
+        exits_today["days_held"] = (exits_today["exit_date"] - exits_today["entry_date"]).dt.days
+
+    # Open trades snapshot
     open_trades = trades[trades["exit_date"].isna()].copy()
     open_trades = open_trades.sort_values(["entry_date", "avg_return"], ascending=[False, False])
 
-    # KPIs (match the spirit of the app)
-    et = datetime.now(pytz.timezone("US/Eastern"))
-    trading_day = et.date()
-    kpi_open = len(open_trades)
+    # KPIs
+    kpi_entries = len(entries_today)
+    kpi_exits   = len(exits_today)
+    kpi_open    = len(open_trades)
     unrealized_avg = open_trades["unrealized_pct_return"].mean() if kpi_open else np.nan
     best_txt = worst_txt = "—"
     if kpi_open:
@@ -351,11 +358,38 @@ if __name__ == "__main__":
 
     # ---------- TEXT BODY ----------
     lines = []
-    lines.append(f"Open Trades Snapshot — {trading_day} (US/Eastern)\n")
-    lines.append(f"Open trades: {kpi_open} | Avg unrealized: {fmt_pct_signed(unrealized_avg) if pd.notna(unrealized_avg) else '—'}")
-    lines.append(f"Best: {best_txt} | Worst: {worst_txt}\n")
+    lines.append(f"Signals — {trading_day} (US/Eastern)")
+    lines.append(f"Entries today: {kpi_entries} | Exits today: {kpi_exits} | Open trades: {kpi_open}")
+    lines.append("")
+
+    # Exits today (ACTION)
+    lines.append("== ACTION NEEDED: Close Today ==")
+    if kpi_exits == 0:
+        lines.append("• None today.")
+    else:
+        for _, r in exits_today.sort_values("exit_date").iterrows():
+            lines.append(
+                f"• {r['symbol']}  | Exit {date_only(r['exit_date'])} @ {fmt_money(r.get('exit_price'))}  "
+                f"(Entry {date_only(r['entry_date'])} @ {fmt_money(r['entry'])}, P&L {fmt_pct_signed(r['pct_return'])})"
+            )
+    lines.append("")
+
+    # Entries today
+    lines.append("== New Entries Today ==")
+    if kpi_entries == 0:
+        lines.append("• None today.")
+    else:
+        for _, r in entries_today.sort_values("entry_date").iterrows():
+            lines.append(
+                f"• {r['symbol']}  | Enter {date_only(r['entry_date'])} @ {fmt_money(r['entry'])}  "
+                f"(Stop {fmt_money(r.get('stop_loss'))}, WR hist {fmt_pct_plain(r.get('win_rate')*100,0) if pd.notna(r.get('win_rate')) else '—'})"
+            )
+    lines.append("")
+
+    # Open snapshot lines
+    lines.append("== Open Trades Snapshot ==")
+    lines.append(f"Avg unrealized: {fmt_pct_signed(unrealized_avg) if pd.notna(unrealized_avg) else '—'} | Best: {best_txt} | Worst: {worst_txt}")
     if kpi_open:
-        lines.append("Symbols:")
         for _, r in open_trades.iterrows():
             lines.append(
                 f"- {r['symbol']}: {r.get('sector','—')} | "
@@ -367,21 +401,35 @@ if __name__ == "__main__":
     body_text = "\n".join(lines)
 
     # ---------- HTML BODY ----------
-    header = f"""
-    <div class="wrap">
-      <h2>Open Trades Snapshot — {trading_day} <span class="muted">(US/Eastern)</span></h2>
-      <div class="kpis">
-        <div class="chip"><strong>Open trades:</strong> {kpi_open}</div>
-        <div class="chip"><strong>Avg unrealized:</strong> {fmt_pct_signed(unrealized_avg) if pd.notna(unrealized_avg) else '—'}</div>
-        <div class="chip"><strong>Best:</strong> {best_txt}</div>
-        <div class="chip"><strong>Worst:</strong> {worst_txt}</div>
-      </div>
-    """
+    html = []
+    html.append(PAGE_CSS)
+    html.append('<div class="wrap">')
+    html.append(f'<h2>Signals — {trading_day} <span class="muted">(US/Eastern)</span></h2>')
+    html.append('<div class="kpis">')
+    html.append(f'<div class="chip"><strong>Entries today:</strong> {kpi_entries}</div>')
+    html.append(f'<div class="chip"><strong>Exits today:</strong> {kpi_exits}</div>')
+    html.append(f'<div class="chip"><strong>Open trades:</strong> {kpi_open}</div>')
+    html.append(f'<div class="chip"><strong>Avg unrealized:</strong> {fmt_pct_signed(unrealized_avg) if pd.notna(unrealized_avg) else "—"}</div>')
+    html.append('</div>')
 
-    table_html = open_trades_table_html(open_trades) if kpi_open else "<p>No open trades.</p>"
-    foot = f'<div class="foot">Generated at {et.strftime("%Y-%m-%d %H:%M %Z")} • Uses GARCH-filtered, auto-thresholded strategy and the same logic as the app Home page.</div></div>'
-    body_html = header + table_html + foot
+    # Exits today
+    html.append('<h3>🚨 Action Needed: Close Today</h3>')
+    html.append(exits_today_table_html(exits_today))
+
+    # Entries today
+    html.append('<h3>🟢 New Entries Today</h3>')
+    html.append(entries_today_table_html(entries_today))
+
+    # Open trades snapshot
+    html.append('<h3>📦 Open Trades Snapshot</h3>')
+    html.append(open_trades_table_html(open_trades))
+
+    html.append(f'<div class="foot">Generated at {et.strftime("%Y-%m-%d %H:%M %Z")} • '
+                'GARCH-filtered & auto-thresholded (same logic as the app).</div>')
+    html.append('</div>')
+    body_html = "".join(html)
 
     # Subject & send
-    subject = f"📈 Open Trades — {trading_day} • {kpi_open} open • Avg {fmt_pct_signed(unrealized_avg) if pd.notna(unrealized_avg) else '—'}"
+    subject = (f"📨 Signals — {trading_day} • "
+               f"{kpi_entries} entries • {kpi_exits} exits • {kpi_open} open")
     send_email(subject, body_text, body_html)
