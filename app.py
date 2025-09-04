@@ -17,7 +17,7 @@ st.set_page_config(page_title="Smart Backtester", layout="wide")
 st.title("📈 Smart Backtester")
 
 # Toggle crypto usage in the app (kept False since your subscription excludes it)
-INCLUDE_CRYPTO = False
+INCLUDE_CRYPTO = True
 
 # Auto threshold settings (global, always on)
 AUTO_MIN_TRADES = 3
@@ -94,17 +94,25 @@ def _polygon_get(url: str, params=None, timeout=30, max_retries=4):
 
 def fetch_polygon_daily(symbol: str, start: str, end: str, asset_type: str) -> pd.DataFrame:
     """
-    symbol: 'AAPL' for stocks, 'BTCUSD' for crypto rows in stocks.csv (not used when INCLUDE_CRYPTO=False)
-    asset_type: 'stock' or 'crypto'
+    Fetch daily bars from Polygon.
+    - Stocks: uses Polygon.
+    - Crypto: SKIPPED here (you refresh it via the Binance script).
     """
-    ticker = f"X:{symbol}" if asset_type == "crypto" else symbol
+    at = (asset_type or "stock").lower()
+    if at == "crypto":
+        # Crypto is updated externally; avoid calling Polygon (no subscription).
+        return pd.DataFrame()
+
+    ticker = symbol  # stocks only
     url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}"
     r = _polygon_get(url, params={"adjusted": "true", "sort": "asc", "limit": 50000})
     if r is None or r.status_code != 200:
         return pd.DataFrame()
+
     results = r.json().get("results", [])
     if not results:
         return pd.DataFrame()
+
     df = pd.DataFrame(results)
     df["date"] = pd.to_datetime(df["t"], unit="ms", utc=True).dt.tz_convert(None)
     df = df.rename(columns={"o":"open","h":"high","l":"low","c":"close","v":"volume"})[
@@ -112,6 +120,7 @@ def fetch_polygon_daily(symbol: str, start: str, end: str, asset_type: str) -> p
     ]
     df["symbol"] = symbol
     return df
+
 
 # --------------------------------------------------------------------------------------
 # GARCH: risk index
