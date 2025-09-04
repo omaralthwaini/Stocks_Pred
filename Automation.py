@@ -58,7 +58,7 @@ if "sector" not in df_existing.columns:
 # Normalize
 df_existing["asset_type"] = df_existing["asset_type"].astype(str).str.lower()
 df_existing.loc[
-    (df_existing["asset_type"] == "crypto") & (df_existing["sector"].isna()),
+    (df_existing["asset_type"] == "Crypto") & (df_existing["sector"].isna()),
     "sector"
 ] = "Crypto"
 
@@ -72,7 +72,7 @@ symbol_meta = (
 )
 
 n_total   = len(symbol_meta)
-n_crypto  = (symbol_meta["asset_type"] == "crypto").sum()
+n_crypto  = (symbol_meta["asset_type"] == "Crypto").sum()
 n_stocks  = n_total - n_crypto
 log(f"Symbols to update: {n_total}  (stocks={n_stocks}, crypto={n_crypto})")
 
@@ -189,7 +189,7 @@ for i, row in symbol_meta.iterrows():
             continue
         log(f"📡 STOCK  {sym}  ({i+1}/{len(symbol_meta)})")
         df_new = fetch_polygon_daily_stock(sym, start_date_str, end_date_str)
-    elif a_type == "crypto":
+    elif a_type == "Crypto":
         if not allow_crypto:
             continue
         log(f"📡 CRYPTO {sym}  ({i+1}/{len(symbol_meta)})")
@@ -205,7 +205,7 @@ for i, row in symbol_meta.iterrows():
     # attach metadata for storage
     df_new["symbol"] = sym
     df_new["asset_type"] = a_type
-    df_new["sector"] = sector if pd.notna(sector) else ("Crypto" if a_type == "crypto" else None)
+    df_new["sector"] = sector if pd.notna(sector) else ("Crypto" if a_type == "Crypto" else None)
     frames.append(df_new)
 
     # light pacing
