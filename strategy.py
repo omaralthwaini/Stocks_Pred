@@ -34,12 +34,10 @@ def run_strategy(
     avg_loss_map=None,       # {"AAPL": -3.8, ...} (percent; usually negative)
     enhanced_cutoff="2025-01-01",
     # NEW knobs (defaults == your current behavior)
-    guard_buffer_pp=0.0,     # extra buffer around thresholds, in percentage points, e.g. 0.75
+    guard_buffer_pp=0.0,     # extra buffer around thresholds, in percentage *points*, e.g. 0.75
     guard_confirm_bars=1,    # need this many consecutive closes beyond threshold to exit
-    min_hold_bars=0,         # don’t allow any enhanced guard to fire before this many bars
+    min_hold_bars=0,         # don’t allow any guard to fire before this many bars
     profit_trail_peak_dd=None,  # if set (e.g. 3.0), exit when drawdown from peak close >= this %
-    # NEW: unconditional daily guard (your request)
-    intraday_red_range_exit_pct: float | None = 4.0,  # if red candle and (high-low)/high >= this %, exit EOD
 ):
     """
     Entry (unchanged):
@@ -51,10 +49,6 @@ def run_strategy(
     Base exits (unchanged):
       • Stop: if a future LOW < prior-day LOW at entry -> next day's OPEN (or same day's CLOSE if last row)
       • SMA breakdown: close below >= 2 of (10/20/50/200) -> exit at CLOSE
-
-    Unconditional guard (new, always on if intraday_red_range_exit_pct is not None):
-      • If a bar is red (close < open) AND (high-low)/high * 100 ≥ intraday_red_range_exit_pct,
-        exit at that day's CLOSE (even if still above SMAs).
 
     Enhanced guards (only for entries on/after enhanced_cutoff, using maps from all history):
       • Loss guard: exit when return <= avg_loss(symbol) - buffer, with confirmation bars
@@ -111,7 +105,7 @@ def run_strategy(
 
             crossed_win_once = False
             consec_loss_hit  = 0
-            consec_win_recross = 0
+            consec_win_recross=0
             peak_close = entry_price  # for optional peak giveback
 
             exit_date   = None
@@ -123,20 +117,6 @@ def run_strategy(
                 date_j  = pd.to_datetime(df_sym.loc[j, "date"])
                 ret_pct = (price_j / entry_price - 1.0) * 100.0
                 bars_held = j - i
-
-                # ---------- NEW: unconditional "red wide-range" guard ----------
-                if intraday_red_range_exit_pct is not None:
-                    open_j = float(df_sym.loc[j, "open"]) if pd.notna(df_sym.loc[j, "open"]) else np.nan
-                    high_j = float(df_sym.loc[j, "high"]) if pd.notna(df_sym.loc[j, "high"]) else np.nan
-                    low_j  = float(df_sym.loc[j, "low"])  if pd.notna(df_sym.loc[j, "low"])  else np.nan
-                    if np.isfinite(open_j) and np.isfinite(high_j) and np.isfinite(low_j) and high_j > 0:
-                        is_red = price_j < open_j
-                        range_pct = (high_j - low_j) / high_j * 100.0  # percent of the high
-                        if is_red and range_pct >= intraday_red_range_exit_pct:
-                            exit_date   = date_j
-                            exit_price  = price_j  # exit at today's close
-                            exit_reason = "guard_red_range_eod"
-                            break
 
                 # Track peak for optional giveback
                 if price_j > peak_close:
