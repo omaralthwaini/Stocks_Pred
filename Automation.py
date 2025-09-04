@@ -1,8 +1,9 @@
 # Automation.py
 # Updates stocks (Polygon) and crypto (Binance) into stocks.csv.
+# For now we only update STOCKS (fast): set UPDATE_CRYPTO=false in the workflow.
 # - Stocks: only during US market hours (unless FORCE_RUN=1/true/yes)
-# - Crypto: every run, 7 days a week
-# - Always overwrites yesterday & today for both asset classes
+# - Crypto: behind a toggle (UPDATE_CRYPTO) for later
+# - Overwrites (symbol, date) rows in the file with fresh data
 
 import os
 import time
@@ -16,10 +17,18 @@ import requests
 # -------------------------------
 # Config / env
 # -------------------------------
-CSV_PATH     = "stocks.csv"
-POLYGON_KEY  = os.getenv("POLYGON_API_KEY", "").strip()
-FORCE_RUN    = os.getenv("FORCE_RUN", "").lower() in {"1", "true", "yes"}
-SESSION      = requests.Session()
+CSV_PATH      = "stocks.csv"
+POLYGON_KEY   = os.getenv("POLYGON_API_KEY", "").strip()
+FORCE_RUN     = os.getenv("FORCE_RUN", "").lower() in {"1", "true", "yes"}
+
+# Toggle which assets to update (workflow sets stocks=True, crypto=False for speed)
+UPDATE_STOCKS = os.getenv("UPDATE_STOCKS", "true").lower() in {"1", "true", "yes"}
+UPDATE_CRYPTO = os.getenv("UPDATE_CRYPTO", "false").lower() in {"1", "true", "yes"}
+
+# How many days back to fetch for stocks (0 = today only)
+STOCKS_WINDOW_DAYS = int(os.getenv("STOCKS_WINDOW_DAYS", "0"))
+
+SESSION = requests.Session()
 
 # -------------------------------
 # Logging
@@ -28,7 +37,7 @@ def log(msg: str) -> None:
     print(f"[{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC] {msg}")
 
 # -------------------------------
-# Time windows
+# Time utilities
 # -------------------------------
 def market_hours_ok_now_et() -> bool:
     """True during 09:30–16:55 ET on Mon–Fri."""
@@ -49,7 +58,7 @@ def day_end_ms(d_str: str) -> int:
     return int(d.timestamp() * 1000) - 1  # inclusive
 
 # -------------------------------
-# Symbol helpers
+# Binance symbol helper (kept for later)
 # -------------------------------
 def to_binance_symbol(symbol: str) -> str:
     """
@@ -98,9 +107,7 @@ def fetch_polygon_daily_stock(symbol: str, start: str, end: str,
 
 def fetch_binance_daily_crypto(symbol: str, start: str, end: str,
                                retries: int = 3, backoff: float = 1.0) -> pd.DataFrame:
-    """
-    Public Binance spot /api/v3/klines (interval=1d).
-    """
+    """Public Binance spot /api/v3/klines (interval=1d)."""
     base = "https://api.binance.com"
     url = f"{base}/api/v3/klines"
     b_symbol = to_binance_symbol(symbol)
@@ -153,33 +160,44 @@ def main():
     if "sector" not in df_existing.columns:
         df_existing["sector"] = np.nan
 
-    # Normalize types/labels
+    # Normalize
     df_existing["asset_type"] = df_existing["asset_type"].astype(str).str.lower()
     df_existing.loc[
         (df_existing["asset_type"] == "crypto") & (df_existing["sector"].isna()),
         "sector"
     ] = "Crypto"
 
-    # Build unique symbol meta
+    # Symbol meta
     meta = (df_existing[["symbol", "asset_type", "sector"]]
             .drop_duplicates()
             .sort_values("symbol")
             .reset_index(drop=True))
 
-    # Decide what we can update right now
-    allow_stocks = FORCE_RUN or market_hours_ok_now_et()
-    allow_crypto = True
+    # Decide allowed
+    allow_stocks = UPDATE_STOCKS and (FORCE_RUN or market_hours_ok_now_et())
+    allow_crypto = UPDATE_CRYPTO
 
     now_utc = datetime.utcnow().replace(tzinfo=pytz.UTC)
     et = now_utc.astimezone(pytz.timezone("US/Eastern"))
     log(f"ET now: {et:%Y-%m-%d %H:%M} | allow_stocks={allow_stocks} | allow_crypto={allow_crypto}")
 
-    # Window: yesterday + today (UTC calendar dates)
+    # Filter meta early for speed
+    before = len(meta)
+    if not allow_crypto:
+        meta = meta[meta["asset_type"] == "stock"].reset_index(drop=True)
+    if not allow_stocks and not allow_crypto:
+        log("ℹ️ Nothing to do (both assets disabled/out of hours).")
+        return
+    log(f"Symbols to update: {len(meta)} (filtered from {before})")
+
+    # Windows
     today = datetime.now(timezone.utc).date()
-    yesterday = today - timedelta(days=1)
-    start_date = yesterday.strftime("%Y-%m-%d")
-    end_date   = today.strftime("%Y-%m-%d")
-    log(f"Fetch window: {start_date} → {end_date}")
+    # Stocks: configurable small window (0 => today only)
+    start_stock = (today - timedelta(days=max(0, STOCKS_WINDOW_DAYS))).strftime("%Y-%m-%d")
+    end_stock   = today.strftime("%Y-%m-%d")
+    # Crypto: yesterday → today (kept for later)
+    start_crypto = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    end_crypto   = end_stock
 
     frames = []
     for i, row in meta.iterrows():
@@ -194,13 +212,13 @@ def main():
             if not allow_stocks:
                 continue
             log(f"📡 STOCK  {sym}  ({i+1}/{len(meta)})")
-            df_new = fetch_polygon_daily_stock(sym, start_date, end_date)
+            df_new = fetch_polygon_daily_stock(sym, start_stock, end_stock)
 
         elif a_type == "crypto":
             if not allow_crypto:
                 continue
             log(f"📡 CRYPTO {sym}  ({i+1}/{len(meta)})")
-            df_new = fetch_binance_daily_crypto(sym, start_date, end_date)
+            df_new = fetch_binance_daily_crypto(sym, start_crypto, end_crypto)
 
         else:
             log(f"➡️  Skip {sym} (unknown asset_type={a_type})")
@@ -214,7 +232,8 @@ def main():
         df_new["sector"] = sector if pd.notna(sector) else ("Crypto" if a_type == "crypto" else None)
         frames.append(df_new)
 
-        time.sleep(0.2)  # gentle pacing
+        # Gentle pacing (Polygon rate limits)
+        time.sleep(0.15 if a_type == "stock" else 0.20)
 
     if not frames:
         log("ℹ️ Nothing fetched this run.")
@@ -223,25 +242,24 @@ def main():
     new_data = pd.concat(frames, ignore_index=True)
     log(f"🟩 New rows fetched: {len(new_data)}")
 
-    # Normalize dates for join keys
+    # Normalize dates and overwrite collisions on (symbol, date)
     new_data["date"] = pd.to_datetime(new_data["date"]).dt.normalize()
     df_existing["date"] = pd.to_datetime(df_existing["date"]).dt.normalize()
 
-    # Overwrite collisions on (symbol, date)
     keys = new_data[["symbol", "date"]].drop_duplicates()
-    before = len(df_existing)
+    before_rows = len(df_existing)
     existing_filtered = (
         df_existing.merge(keys, on=["symbol", "date"], how="left", indicator=True)
                    .loc[lambda x: x["_merge"] == "left_only"]
                    .drop(columns="_merge")
     )
-    dropped = before - len(existing_filtered)
+    dropped = before_rows - len(existing_filtered)
     log(f"🗑️  Overwritten existing rows: {dropped}")
 
     combined = pd.concat([new_data, existing_filtered], ignore_index=True)
     combined = combined.drop_duplicates(subset=["symbol", "date"], keep="first").sort_values(["symbol", "date"])
 
-    # (Optional) keep a friendly column order if present
+    # Friendly column order
     preferred = ["date","open","high","low","close","volume","symbol","asset_type","sector"]
     cols = [c for c in preferred if c in combined.columns] + [c for c in combined.columns if c not in preferred]
     combined = combined[cols]
