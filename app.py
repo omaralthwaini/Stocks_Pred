@@ -728,10 +728,14 @@ if page == "Home":
 
             show_cols = ["symbol_display", "sector", "entry_date", "Entry", "1D Change", "P&L Now"]
             alarms_fmt = alarms_fmt.rename(columns={
-                "symbol_display": "Symbol",
-                "sector": "Sector",
-                "entry_date": "Entry Date",
-            })[show_cols]
+            "symbol_display": "Symbol",
+            "sector": "Sector",
+            "entry_date": "Entry Date",
+            })
+
+            show_cols = ["Symbol", "Sector", "Entry Date", "Entry", "1D Change", "P&L Now"]
+            alarms_fmt = alarms_fmt[show_cols]
+
 
             st.subheader(f"🚨 Alarm List — 1-Day Drop ≥ {globals().get('ALARM_DAILY_DROP_PCT', 2.0):.0f}%")
             st.dataframe(add_rownum(alarms_fmt), use_container_width=True, hide_index=True)
