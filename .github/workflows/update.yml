@@ -2,8 +2,7 @@ name: Auto Update Stocks & Crypto
 
 on:
   schedule:
-    # Run every 30 minutes during the US stock session (Mon–Fri).
-    # The script itself will skip stock updates outside market hours.
+    # Every 30 min during US stock session (Mon–Fri). The script skips stocks if out of hours.
     - cron: "*/30 14-21 * * 1-5"
     # Daily run (7 days/wk) so crypto is refreshed & yesterday gets finalized.
     - cron: "15 0 * * *"
@@ -39,14 +38,36 @@ jobs:
         run: python Automation.py
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
-          # When you click "Run workflow" manually in GitHub,
-          # FORCE_RUN=true lets stocks update even if outside market hours.
+          # When you click "Run workflow" manually in GitHub, FORCE_RUN=true lets stocks update
+          # even if outside market hours.
           FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' }}
 
+      - name: Detect changes
+        id: diff
+        run: |
+          if git diff --quiet -- stocks.csv; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Commit & push changes
+        if: steps.diff.outputs.changed == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add stocks.csv
-          git commit -m "📈 Auto-update stocks.csv" || echo "No changes to commit"
+          git commit -m "📈 Auto-update stocks.csv"
           git push
+
+      # Restore your email step
+      - name: Send Trade Summary Email
+        run: python send_email.py
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO:   ${{ secrets.EMAIL_TO }}
+          EMAIL_SMTP_HOST: ${{ secrets.EMAIL_SMTP_HOST }}
+          EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
+          # If your SMTP requires SSL on 465, uncomment:
+          # EMAIL_SMTP_SSL: "true"
