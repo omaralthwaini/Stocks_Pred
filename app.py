@@ -685,6 +685,50 @@ if page == "Home":
         })
 
         st.dataframe(add_rownum(table), use_container_width=True, hide_index=True)
+        # ---------------- Alarm list: 1-day drop alert ----------------
+        # Build per-symbol 1D % change using the latest row vs previous close
+        df_tmp = df[["symbol", "date", "close"]].copy().sort_values(["symbol", "date"])
+        df_tmp["prev_close"] = df_tmp.groupby("symbol")["close"].shift(1)
+        df_tmp["day_change_pct"] = (df_tmp["close"] / df_tmp["prev_close"] - 1.0) * 100.0
+
+        # Take the most recent row per symbol
+        latest_per_sym = (
+            df_tmp.groupby("symbol", as_index=False)
+                 .tail(1)[["symbol", "day_change_pct"]]
+        )
+
+        # Join onto current OPEN trades
+        alarms = (
+            open_trades[["symbol", "symbol_display", "sector", "entry_date",
+                         "entry", "latest_close", "unrealized_pct_return"]]
+            .merge(latest_per_sym, on="symbol", how="left")
+        )
+
+        # Trigger when 1D change <= -ALARM_DAILY_DROP_PCT (defaults to -2.0%)
+        threshold = -float(globals().get("ALARM_DAILY_DROP_PCT", 2.0))
+        alarms = alarms[alarms["day_change_pct"].le(threshold)].copy()
+
+        if not alarms.empty:
+            alarms = alarms.sort_values("day_change_pct")  # worst first
+            # Format columns
+            alarms_fmt = alarms.copy()
+            alarms_fmt = date_only_cols(alarms_fmt, ["entry_date"])
+            alarms_fmt["P&L Now"] = alarms_fmt["unrealized_pct_return"].map(lambda x: pct_str(x))
+            alarms_fmt["1D Change"] = alarms_fmt["day_change_pct"].map(lambda x: pct_str(x))
+            alarms_fmt["Entry"] = alarms_fmt["entry"].map(money_str)
+
+            show_cols = ["symbol_display", "sector", "entry_date", "Entry", "1D Change", "P&L Now"]
+            alarms_fmt = alarms_fmt.rename(columns={
+                "symbol_display": "Symbol",
+                "sector": "Sector",
+                "entry_date": "Entry Date",
+            })[show_cols]
+
+            st.subheader(f"🚨 Alarm List — 1-Day Drop ≥ {globals().get('ALARM_DAILY_DROP_PCT', 2.0):.0f}%")
+            st.dataframe(add_rownum(alarms_fmt), use_container_width=True, hide_index=True)
+        else:
+            st.subheader(f"🚨 Alarm List — 1-Day Drop ≥ {globals().get('ALARM_DAILY_DROP_PCT', 2.0):.0f}%")
+            st.info("No alerts right now.")
 
 # ---------- INSIGHTS ----------
 if page == "Insights":
