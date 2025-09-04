@@ -99,7 +99,7 @@ def fetch_polygon_daily(symbol: str, start: str, end: str, asset_type: str) -> p
     - Crypto: SKIPPED here (you refresh it via the Binance script).
     """
     at = (asset_type or "stock").lower()
-    if at == "crypto":
+    if at == "Crypto":
         # Crypto is updated externally; avoid calling Polygon (no subscription).
         return pd.DataFrame()
 
@@ -349,12 +349,12 @@ def load_raw_prices() -> pd.DataFrame:
     # Normalize asset_type + sector
     df["asset_type"] = df["asset_type"].astype(str).str.lower()
     if INCLUDE_CRYPTO:
-        mask_crypto = df["asset_type"].eq("crypto")
+        mask_crypto = df["asset_type"].eq("Crypto")
         df["sector"] = df["sector"].astype("object")
         df.loc[mask_crypto & (df["sector"].isna() | (df["sector"].astype(str).str.strip() == "")), "sector"] = "Crypto"
     else:
         # If crypto exists in file but you don't want to use it, keep rows but mark sector consistently
-        df.loc[df["asset_type"].eq("crypto") & df["sector"].isna(), "sector"] = "Crypto"
+        df.loc[df["asset_type"].eq("Crypto") & df["sector"].isna(), "sector"] = "Crypto"
 
     return df
 
@@ -384,7 +384,7 @@ def update_prices_today(df_existing: pd.DataFrame,
             .drop_duplicates()
             .reset_index(drop=True))
     if not include_crypto:
-        meta = meta[meta["asset_type"].str.lower() != "crypto"]
+        meta = meta[meta["asset_type"].str.lower() != "Crypto"]
 
     if meta.empty:
         st.warning("No symbols to update.")
@@ -479,7 +479,7 @@ stocks_caps = caps[~caps["cap_score"].isin([3, 4])].sort_values("cap_score")
 top_stock_symbols = stocks_caps.head(100)["symbol"].unique().tolist()
 
 if INCLUDE_CRYPTO:
-    crypto_only = df0[df0["asset_type"] == "crypto"].copy()
+    crypto_only = df0[df0["asset_type"] == "Crypto"].copy()
     crypto_symbols = crypto_only["symbol"].unique().tolist()
 else:
     crypto_symbols = []
