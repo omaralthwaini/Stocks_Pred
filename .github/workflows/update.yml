@@ -1,10 +1,11 @@
+# .github/workflows/update.yml
 name: Auto Update Stocks & Crypto
 
 on:
   schedule:
     # Every 30 min during US stock session (Mon–Fri). The script skips stocks if out of hours.
     - cron: "*/30 14-21 * * 1-5"
-    # Daily run (7 days/wk) so crypto is refreshed & yesterday gets finalized.
+    # Daily run (7 days/wk) so crypto would refresh & yesterday gets finalized (kept for later).
     - cron: "15 0 * * *"
   workflow_dispatch: {}
 
@@ -41,6 +42,11 @@ jobs:
           # When you click "Run workflow" manually in GitHub, FORCE_RUN=true lets stocks update
           # even if outside market hours.
           FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+          # Only update stocks for speed right now:
+          UPDATE_STOCKS: "true"
+          UPDATE_CRYPTO: "false"
+          # Fetch just today's bar for stocks:
+          STOCKS_WINDOW_DAYS: "0"
 
       - name: Detect changes
         id: diff
@@ -60,7 +66,7 @@ jobs:
           git commit -m "📈 Auto-update stocks.csv"
           git push
 
-      # Restore your email step
+      # Send your email (kept as-is)
       - name: Send Trade Summary Email
         run: python send_email.py
         env:
