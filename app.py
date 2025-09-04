@@ -559,14 +559,46 @@ trades["final_pct"] = trades.apply(
 )
 
 # Min/Max since entry (for open trades)
-minmax = []
-for _, r in trades[trades["exit_date"].isna()].iterrows():
-    sym, entry_date = r["symbol"], r["entry_date"]
-    sl = df[(df["symbol"] == sym) & (df["date"] >= entry_date)]
-    if not sl.empty:
-        minmax.append((sym, entry_date, sl["low"].min(), sl["high"].max()))
-minmax_df = pd.DataFrame(minmax, columns=["symbol", "entry_date", "min_low", "max_high"]) if minmax else pd.DataFrame(columns=["symbol","entry_date","min_low","max_high"])
-trades = trades.merge(minmax_df, on=["symbol", "entry_date"], how="left")
+# --- Per-trade min/max (works for open + closed) ---
+def add_minmax_for_trades(df_prices: pd.DataFrame, trades_df: pd.DataFrame) -> pd.DataFrame:
+    prices = df_prices[["symbol", "date", "low", "high"]].copy()
+    prices["date"] = pd.to_datetime(prices["date"], errors="coerce")
+    prices = prices.dropna(subset=["date"])
+
+    # latest available date per symbol (used for open trades)
+    last_date_by_sym = prices.groupby("symbol")["date"].max()
+
+    rows = []
+    for _, tr in trades_df.iterrows():
+        sym = tr["symbol"]
+        start = pd.to_datetime(tr["entry_date"], errors="coerce")
+        # closed → bound by exit_date; open → bound by latest price date
+        end = (pd.to_datetime(tr["exit_date"], errors="coerce")
+               if pd.notna(tr["exit_date"])
+               else last_date_by_sym.get(sym, pd.NaT))
+
+        if pd.isna(start) or pd.isna(end):
+            continue
+
+        sl = prices[(prices["symbol"] == sym) &
+                    (prices["date"] >= start) &
+                    (prices["date"] <= end)]
+        if sl.empty:
+            continue
+
+        rows.append({
+            "symbol": sym,
+            "entry_date": start,
+            "min_low": float(sl["low"].min()),
+            "max_high": float(sl["high"].max()),
+        })
+
+    mm = pd.DataFrame(rows)
+    return trades_df.merge(mm, on=["symbol", "entry_date"], how="left")
+
+# apply
+trades = add_minmax_for_trades(df, trades)
+
 
 # Closed perf aggregates for display (avg_return / avg_win / win_rate)
 closed = trades[trades["exit_date"].notna()].copy()
