@@ -2,9 +2,9 @@ name: Auto Update Stocks & Crypto
 
 on:
   schedule:
-    # Every 30 min during US stock session (Mon–Fri). The script skips stocks if out of hours.
+    # Every 30 min during US stock session (Mon–Fri). The script itself skips stocks if out of hours.
     - cron: "*/30 14-21 * * 1-5"
-    # Daily run (7 days/wk) so crypto is refreshed & yesterday gets finalized.
+    # Daily run (7 days/wk) so crypto (and yesterday’s candle) get refreshed.
     - cron: "15 0 * * *"
   workflow_dispatch: {}
 
@@ -28,18 +28,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+          cache: "pip"     # speed up installs across runs
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy requests pytz
+          # arch is needed by send_email.py (for GARCH); scipy & statsmodels are common deps
+          pip install pandas numpy requests pytz scipy statsmodels arch
 
       - name: Run updater
         run: python Automation.py
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
-          # When you click "Run workflow" manually in GitHub, FORCE_RUN=true lets stocks update
-          # even if outside market hours.
+          # When you click “Run workflow” manually, this lets stock updates run even outside market hours
           FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Detect changes
@@ -60,8 +61,9 @@ jobs:
           git commit -m "📈 Auto-update stocks.csv"
           git push
 
-      # Restore your email step
+      # Send the daily signal summary email (only if all required secrets exist)
       - name: Send Trade Summary Email
+        if: ${{ secrets.EMAIL_USER && secrets.EMAIL_PASS && secrets.EMAIL_TO && secrets.EMAIL_SMTP_HOST && secrets.EMAIL_SMTP_PORT }}
         run: python send_email.py
         env:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
@@ -69,5 +71,5 @@ jobs:
           EMAIL_TO:   ${{ secrets.EMAIL_TO }}
           EMAIL_SMTP_HOST: ${{ secrets.EMAIL_SMTP_HOST }}
           EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
-          # If your SMTP requires SSL on 465, uncomment:
+          # If your SMTP requires SSL on 465, uncomment the next line and handle SSL in send_email.py
           # EMAIL_SMTP_SSL: "true"
