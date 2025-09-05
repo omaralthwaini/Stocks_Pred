@@ -1,0 +1,58 @@
+name: Update Stocks (Polygon)
+
+on:
+  schedule:
+    # Every 30 min during US market session (Mon–Fri). Times are UTC.
+    - cron: "*/30 14-21 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stocks-csv
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy requests pytz
+
+      - name: Run updater (stocks only)
+        run: python Automation.py
+        env:
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          # True when manually dispatched; script treats 'true' as FORCE_RUN
+          FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Detect changes
+        id: diff
+        run: |
+          if git diff --quiet -- stocks.csv; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit & push changes
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add stocks.csv
+          git commit -m "📈 Auto-update stocks.csv (stocks)"
+          git push
