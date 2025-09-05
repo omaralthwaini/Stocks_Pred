@@ -59,6 +59,14 @@ def date_only_cols(df_in, cols=("entry_date","exit_date")):
             df[c] = s.dt.strftime("%Y-%m-%d").where(s.notna(), df[c])
     return df
 
+def _file_sig(path: str) -> str:
+    """Tiny fingerprint of a file to use as a cache key (mtime + size)."""
+    try:
+        s = os.stat(path)
+        return f"{s.st_mtime_ns}-{s.st_size}"
+    except FileNotFoundError:
+        return f"missing-{time.time()}"
+
 # --------------------------------------------------------------------------------------
 # Light Polygon client (daily OHLCV)
 # --------------------------------------------------------------------------------------
@@ -96,11 +104,10 @@ def fetch_polygon_daily(symbol: str, start: str, end: str, asset_type: str) -> p
     """
     Fetch daily bars from Polygon.
     - Stocks: uses Polygon.
-    - Crypto: SKIPPED here (you refresh it via the Binance script).
+    - Crypto: SKIPPED here (you refresh it via the Binance/Crypto script).
     """
     at = (asset_type or "stock").lower()
     if at == "crypto":
-        # Crypto is updated externally; avoid calling Polygon (no subscription).
         return pd.DataFrame()
 
     ticker = symbol  # stocks only
@@ -120,7 +127,6 @@ def fetch_polygon_daily(symbol: str, start: str, end: str, asset_type: str) -> p
     ]
     df["symbol"] = symbol
     return df
-
 
 # --------------------------------------------------------------------------------------
 # GARCH: risk index
@@ -334,29 +340,31 @@ def optimize_thresholds_per_symbol_closed(
     return best_map, pd.DataFrame(rows)
 
 # --------------------------------------------------------------------------------------
-# Load prices (from file only on app start)
+# Load prices & caps with file-signature cache keys
 # --------------------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_raw_prices() -> pd.DataFrame:
+def load_raw_prices(_sig: str) -> pd.DataFrame:
     df = pd.read_csv("stocks.csv", parse_dates=["date"])
 
-    # Ensure required columns exist
     if "asset_type" not in df.columns:
         df["asset_type"] = "stock"
     if "sector" not in df.columns:
         df["sector"] = None
 
-    # Normalize asset_type + sector
     df["asset_type"] = df["asset_type"].astype(str).str.lower()
+
     if INCLUDE_CRYPTO:
         mask_crypto = df["asset_type"].eq("crypto")
         df["sector"] = df["sector"].astype("object")
         df.loc[mask_crypto & (df["sector"].isna() | (df["sector"].astype(str).str.strip() == "")), "sector"] = "Crypto"
     else:
-        # If crypto exists in file but you don't want to use it, keep rows but mark sector consistently
         df.loc[df["asset_type"].eq("crypto") & df["sector"].isna(), "sector"] = "Crypto"
 
     return df
+
+@st.cache_data(show_spinner=False)
+def load_caps(_sig: str) -> pd.DataFrame:
+    return pd.read_csv("market_cap.csv")
 
 # --------------------------------------------------------------------------------------
 # Manual "update today" (overwrite today's rows)
@@ -394,7 +402,7 @@ def update_prices_today(df_existing: pd.DataFrame,
     frames = []
 
     with st.spinner(f"🔄 Fetching today's bars ({start})…"):
-        for i, row in meta.iterrows():
+        for _, row in meta.iterrows():
             sym = str(row["symbol"]).strip()
             a_type = (row["asset_type"] or "stock").lower()
             if not sym:
@@ -436,40 +444,41 @@ def update_prices_today(df_existing: pd.DataFrame,
     return combined
 
 # --------------------------------------------------------------------------------------
-# Sidebar: no auto-update on load; manual update overwrites today's rows
+# Sidebar: manual update; auto-reload latest files via signatures
 # --------------------------------------------------------------------------------------
 st.sidebar.header("Data")
 st.sidebar.caption(f"Polygon key: {'✅ found' if get_polygon_key() else '❌ missing'}")
 
-# Load current file (only)
-df0 = load_raw_prices()
+# Create cache keys from on-disk state; clear caches only when signatures change
+stocks_sig_now = _file_sig("stocks.csv")
+caps_sig_now   = _file_sig("market_cap.csv")
+
+if (st.session_state.get("_stocks_sig") != stocks_sig_now) or (st.session_state.get("_caps_sig") != caps_sig_now):
+    st.session_state["_stocks_sig"] = stocks_sig_now
+    st.session_state["_caps_sig"]   = caps_sig_now
+    try: st.cache_data.clear()
+    except Exception: pass
+    try: st.cache_resource.clear()
+    except Exception: pass
+
+# Load current files using signatures (so cache invalidates when files change)
+df0  = load_raw_prices(stocks_sig_now)
+caps = load_caps(caps_sig_now)
 
 if st.sidebar.button("🔄 Update data now"):
     try:
         _ = update_prices_today(df0, include_crypto=INCLUDE_CRYPTO)
-        # Clear caches and rerun so the rest of the app picks up the saved file
+        # After writing stocks.csv, update signature → clear caches → rerun
+        st.session_state["_stocks_sig"] = _file_sig("stocks.csv")
         try: st.cache_data.clear()
         except Exception: pass
         try: st.cache_resource.clear()
         except Exception: pass
-        if hasattr(st, "rerun"):
-            st.rerun()
-        else:
-            st.experimental_rerun()
+        if hasattr(st, "rerun"): st.rerun()
+        else: st.experimental_rerun()
     except Exception as e:
         st.error(f"Update failed: {e}")
-
-# --------------------------------------------------------------------------------------
-# Market caps (for stock universe)
-# --------------------------------------------------------------------------------------
-@st.cache_data(show_spinner=False)
-def load_caps() -> pd.DataFrame:
-    caps = pd.read_csv("market_cap.csv")
-    return caps
-
-caps = load_caps()
-
-# --------------------------------------------------------------------------------------
+        
 # Universe selection
 #   - Stocks: filter by market_cap (remove cap 3 & 4, then take top 100 by cap_score)
 #   - Crypto: skipped unless INCLUDE_CRYPTO=True
