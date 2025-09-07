@@ -346,27 +346,21 @@ def optimize_thresholds_per_symbol_closed(
 def load_raw_prices(_sig: str) -> pd.DataFrame:
     df = pd.read_csv("stocks.csv", parse_dates=["date"])
 
-    # Ensure expected columns exist
     if "asset_type" not in df.columns:
         df["asset_type"] = "stock"
     if "sector" not in df.columns:
         df["sector"] = None
 
-    # Normalize and **filter first** → keep only stocks
     df["asset_type"] = df["asset_type"].astype(str).str.lower()
-    df = df[df["asset_type"] == "stock"].copy()
 
-    # Tidy sector so UI doesn’t show “None” chips
-    df["sector"] = df["sector"].astype("object")
-    df.loc[df["sector"].isna() | (df["sector"].astype(str).str.strip() == ""), "sector"] = "Stocks"
+    if INCLUDE_CRYPTO:
+        mask_crypto = df["asset_type"].eq("crypto")
+        df["sector"] = df["sector"].astype("object")
+        df.loc[mask_crypto & (df["sector"].isna() | (df["sector"].astype(str).str.strip() == "")), "sector"] = "Crypto"
+    else:
+        df.loc[df["asset_type"].eq("crypto") & df["sector"].isna(), "sector"] = "Crypto"
 
-    # Optional: de-dup + sort (harmless and keeps things clean)
-    df = (df
-          .drop_duplicates(subset=["symbol", "date"])
-          .sort_values(["symbol", "date"])
-          .reset_index(drop=True))
     return df
-
 
 @st.cache_data(show_spinner=False)
 def load_caps(_sig: str) -> pd.DataFrame:
