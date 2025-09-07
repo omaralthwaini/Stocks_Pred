@@ -164,6 +164,10 @@ trades["final_pct"] = trades.apply(lambda r: r["pct_return"] if pd.notna(r["exit
 # Pages: reuse the same UI blocks from your current app (Home / Insights / Tester / Compare).
 # They will now run on crypto-only `df` and `trades`.
 # For brevity, paste your page sections here unchanged.
+# --- Ensure performance columns exist even if there are no closed trades ---
+for col in ("avg_return", "avg_win_return", "win_rate"):
+    if col not in trades.columns:
+        trades[col] = np.nan
 
 # Pages (same UI as your app) ...
 st.sidebar.header("Navigation")
@@ -174,6 +178,15 @@ if page == "Home":
     st.subheader("🔓 Open Trades")
 
     open_trades = trades[trades["exit_date"].isna()].copy()
+
+# If avg_return isn’t present for some reason, add it so sorting never fails
+    if "avg_return" not in open_trades.columns:
+        open_trades["avg_return"] = np.nan
+
+# Sort by whatever columns are available
+    sort_cols = [c for c in ["entry_date", "avg_return"] if c in open_trades.columns]
+    open_trades = open_trades.sort_values(sort_cols, ascending=[False]*len(sort_cols), na_position="last")
+
     if open_trades.empty:
         st.info("No open trades.")
     else:
