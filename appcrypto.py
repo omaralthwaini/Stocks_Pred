@@ -96,12 +96,26 @@ def optimize_thresholds_per_symbol_closed(trades_all, step: float = AUTO_GRID_ST
 @st.cache_data(show_spinner=False)
 def load_raw_prices(sig: str, asset_filter: str) -> pd.DataFrame:
     df = pd.read_csv("stocks.csv", parse_dates=["date"])
-    if "asset_type" not in df.columns: df["asset_type"] = "stock"
-    if "sector" not in df.columns: df["sector"] = None
+
+    # Ensure columns exist
+    if "asset_type" not in df.columns:
+        df["asset_type"] = "stock"
+    if "sector" not in df.columns:
+        df["sector"] = None
+
+    # Normalize and FILTER FIRST
     df["asset_type"] = df["asset_type"].astype(str).str.lower()
     df = df[df["asset_type"] == asset_filter].copy()
-    df["sector"] = "Crypto"
+
+    # Fill sector nicely so the UI doesn't show None
+    df["sector"] = df["sector"].astype("object")
+    if asset_filter == "crypto":
+        df.loc[df["sector"].isna() | (df["sector"].astype(str).str.strip() == ""), "sector"] = "Crypto"
+    else:  # stocks app
+        df.loc[df["sector"].isna() | (df["sector"].astype(str).str.strip() == ""), "sector"] = "Stocks"
+
     return df
+
 
 stocks_sig_now = _file_sig("stocks.csv")
 df0 = load_raw_prices(stocks_sig_now, APP_MODE)
@@ -151,6 +165,9 @@ trades["final_pct"] = trades.apply(lambda r: r["pct_return"] if pd.notna(r["exit
 # They will now run on crypto-only `df` and `trades`.
 # For brevity, paste your page sections here unchanged.
 
+# Pages (same UI as your app) ...
+st.sidebar.header("Navigation")
+page = st.sidebar.radio("Choose page", ["Home","Insights","Tester","Compare"], index=0)
 
 # ---------- HOME ----------
 if page == "Home":
