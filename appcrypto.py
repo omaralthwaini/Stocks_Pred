@@ -179,13 +179,21 @@ if page == "Home":
 
     open_trades = trades[trades["exit_date"].isna()].copy()
 
-# If avg_return isn’t present for some reason, add it so sorting never fails
+# Guarantee required columns exist so sort never KeyErrors
+    if "entry_date" not in open_trades.columns:
+        open_trades["entry_date"] = pd.NaT
     if "avg_return" not in open_trades.columns:
         open_trades["avg_return"] = np.nan
 
-# Sort by whatever columns are available
+# Sort only by the columns that truly exist
     sort_cols = [c for c in ["entry_date", "avg_return"] if c in open_trades.columns]
-    open_trades = open_trades.sort_values(sort_cols, ascending=[False]*len(sort_cols), na_position="last")
+    if sort_cols:
+        open_trades = open_trades.sort_values(
+            by=sort_cols,
+            ascending=[False] * len(sort_cols),
+            na_position="last"
+        )
+
 
     if open_trades.empty:
         st.info("No open trades.")
