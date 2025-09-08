@@ -48,8 +48,36 @@ def pct_str(x, digits=2, signed=True):
     fmt = f"{{:{'+' if signed else ''}.{digits}f}}%"
     return fmt.format(x)
 
-def money_str(x):
-    return "—" if pd.isna(x) else f"${x:,.2f}"
+def money_str(x, *, symbol="$", max_dec=8, use_sep=False):
+    """
+    Flexible price formatting:
+      - up to `max_dec` decimals, but trailing zeros are removed
+      - preserves small crypto prices like 0.00012345
+      - returns '—' for NaN
+    """
+    if pd.isna(x):
+        return "—"
+    try:
+        x = float(x)
+    except Exception:
+        return str(x)
+
+    neg = x < 0
+    x_abs = abs(x)
+
+    # format with max_dec then strip trailing zeros
+    s = f"{x_abs:.{max_dec}f}".rstrip("0").rstrip(".")
+    if use_sep:
+        if "." in s:
+            i, f = s.split(".", 1)
+            i = f"{int(i):,}"
+            s = f"{i}.{f}" if f else i
+        else:
+            s = f"{int(s):,}"
+
+    s = f"{symbol}{s}"
+    return f"-{s}" if neg else s
+
 
 def date_only_cols(df_in, cols=("entry_date","exit_date")):
     df = df_in.copy()
@@ -464,6 +492,27 @@ if (st.session_state.get("_stocks_sig") != stocks_sig_now) or (st.session_state.
 # Load current files using signatures (so cache invalidates when files change)
 df0  = load_raw_prices(stocks_sig_now)
 caps = load_caps(caps_sig_now)
+
+# --- Last update status (file mtime + latest candle date) ---
+def _mtime_str(path: str) -> str:
+    try:
+        t = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
+        return t.strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:
+        return "unknown"
+
+last_file_update = _mtime_str("stocks.csv")
+latest_candle = None
+if not df0.empty and "date" in df0.columns:
+    try:
+        latest_candle = pd.to_datetime(df0["date"]).max()
+    except Exception:
+        latest_candle = None
+
+latest_candle_str = latest_candle.strftime("%Y-%m-%d") if pd.notna(latest_candle) else "—"
+
+st.caption(f"🕒 Data last updated (file): {last_file_update} • Latest candle date in file: {latest_candle_str}")
+
 
 if st.sidebar.button("🔄 Update data now"):
     try:
