@@ -1,0 +1,57 @@
+name: Backtest (to Supabase)
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Start date YYYY-MM-DD (optional)"
+        required: false
+      end:
+        description: "End date YYYY-MM-DD (optional)"
+        required: false
+      symbols:
+        description: "Comma separated symbols (optional)"
+        required: false
+      include_crypto:
+        description: "Include crypto (true/false)"
+        required: false
+        default: "true"
+  schedule:
+    - cron: "0 6,12,18 * * *"   # 06:00, 12:00, 18:00 UTC daily (adjust as you like)
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build CLI args
+        id: args
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.start }}" != "" ]; then ARGS="$ARGS --start ${{ github.event.inputs.start }}"; fi
+          if [ "${{ github.event.inputs.end }}" != "" ]; then ARGS="$ARGS --end ${{ github.event.inputs.end }}"; fi
+          if [ "${{ github.event.inputs.symbols }}" != "" ]; then ARGS="$ARGS --symbols '${{ github.event.inputs.symbols }}'"; fi
+          INCLUDE="${{ github.event.inputs.include_crypto }}"
+          if [ "$INCLUDE" = "" ]; then INCLUDE="true"; fi
+          ARGS="$ARGS --include-crypto $INCLUDE"
+          echo "args=$ARGS" >> $GITHUB_OUTPUT
+
+      - name: Run backtest and save
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+        run: |
+          python batch_backtest.py ${{ steps.args.outputs.args }}
