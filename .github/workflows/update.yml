@@ -62,15 +62,16 @@ jobs:
           git push
 
       # Send the daily signal summary email (only if all required secrets exist)
-      - name: Send Trade Summary Email
-        if: ${{ secrets.EMAIL_USER && secrets.EMAIL_PASS && secrets.EMAIL_TO && secrets.EMAIL_SMTP_HOST && secrets.EMAIL_SMTP_PORT }}
-        run: python send_email.py
-        env:
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          EMAIL_TO:   ${{ secrets.EMAIL_TO }}
-          EMAIL_SMTP_HOST: ${{ secrets.EMAIL_SMTP_HOST }}
-          EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
+      #- name: Send Trade Summary Email
+        #if: ${{ secrets.EMAIL_USER && secrets.EMAIL_PASS && secrets.EMAIL_TO && secrets.EMAIL_SMTP_HOST && secrets.EMAIL_SMTP_PORT }}
+        #run: python send_email.py
+        #env:
+          #EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          #EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          #EMAIL_TO:   ${{ secrets.EMAIL_TO }}
+          #EMAIL_SMTP_HOST: ${{ secrets.EMAIL_SMTP_HOST }}
+         # EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
           # If your SMTP requires SSL on 465, uncomment the next line and handle SSL in send_email.py
           # EMAIL_SMTP_SSL: "true"
+
 ##testing this
