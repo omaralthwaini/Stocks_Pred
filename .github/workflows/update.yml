@@ -36,12 +36,17 @@ jobs:
           # arch is needed by send_email.py (for GARCH); scipy & statsmodels are common deps
           pip install pandas numpy requests pytz scipy statsmodels arch
 
-      - name: Run updater
+        - name: Run updater
         run: python Automation.py
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
           # When you click “Run workflow” manually, this lets stock updates run even outside market hours
           FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Run crypto updater
+        run: python Crypto.py
+        env:
+          CRYPTOCOMPARE_API_KEY: ${{ secrets.CRYPTOCOMPARE_API_KEY }}
 
       - name: Detect changes
         id: diff
