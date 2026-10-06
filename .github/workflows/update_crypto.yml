@@ -50,7 +50,7 @@ jobs:
       - name: Commit & push changes
         if: steps.diff.outputs.changed == 'true'
         run: |
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add stocks.csv
           git commit -m "🪙 Auto-update stocks.csv (crypto via CoinGecko)"
