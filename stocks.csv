@@ -46326,6 +46326,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-26,155.835,155.85,151.35,153.14,5575190.139087,BKNG,stock,Consumer Discretionary
 2026-10-28,148.9,149.935,146.28,147.94,8566793.855394,BKNG,stock,Consumer Discretionary
 2026-10-29,150.6,151.84,147.53,150.43,5907263.37021,BKNG,stock,Consumer Discretionary
+2026-11-10,164.77,165.19,158.26,159.26,6436558.813693,BKNG,stock,Consumer Discretionary
 2020-01-01,13.7,13.8,13.57,13.68,987209.61,BNBUSD,crypto,Crypto
 2020-01-02,13.68,13.27,12.98,13.0,785533.68,BNBUSD,crypto,Crypto
 2020-01-03,13.0,14.0,13.59,13.65,741920.23,BNBUSD,crypto,Crypto
@@ -53628,6 +53629,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-22,14.2,15.15,14.15,15.07,15838317.875224,CAG,stock,Consumer Staples
 2026-10-28,14.02,14.135,13.8,13.92,6777772.060705,CAG,stock,Consumer Staples
 2026-10-29,14.15,14.17,13.83,14.09,8705592.34313,CAG,stock,Consumer Staples
+2026-11-10,15.21,15.3,14.93,15.19,12034464.984607,CAG,stock,Consumer Staples
 2023-02-28,1660.18,1668.82,1619.03,1625.61,1137.47,CBETHUSD,crypto,Crypto
 2023-03-01,1625.61,1696.47,1613.81,1688.24,2000.27,CBETHUSD,crypto,Crypto
 2023-03-02,1688.24,1701.51,1639.44,1656.86,2385.41,CBETHUSD,crypto,Crypto
@@ -56214,6 +56216,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-28,27.695,28.12,27.68,28.06,15549723.618882,CCL,stock,Consumer Discretionary
 2026-10-29,28.9,29.135,28.64,28.84,24149597.949598,CCL,stock,Consumer Discretionary
 2026-11-03,30.3,30.3,29.145,29.2,18556165.079632,CCL,stock,Consumer Discretionary
+2026-11-10,30.84,30.95,30.415,30.74,10741813.033481,CCL,stock,Consumer Discretionary
 2020-08-19,109.23,109.585,107.4,108.53,1195435.0,CDNS,stock,Information Technology
 2020-08-20,108.0,111.63,107.97,111.26,1288580.0,CDNS,stock,Information Technology
 2020-08-21,110.735,111.2,109.31,110.57,1438342.0,CDNS,stock,Information Technology
@@ -70930,6 +70933,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-15,19.57,20.505,19.55,19.84,9789681.334355,CPB,stock,Consumer Staples
 2026-11-02,21.53,22.17,21.244,22.14,6680652.9762,CPB,stock,Consumer Staples
 2026-11-09,23.13,23.13,22.62,22.86,4308549.006433,CPB,stock,Consumer Staples
+2026-11-10,22.82,22.93,22.475,22.59,4711784.179433,CPB,stock,Consumer Staples
 2020-08-19,204.0,207.1,200.03,205.11,7172195.0,CRM,stock,Information Technology
 2020-08-20,203.85,210.11,203.51,209.51,5236569.0,CRM,stock,Information Technology
 2020-08-21,209.94,210.0,206.25,207.53,5239883.0,CRM,stock,Information Technology
@@ -72361,6 +72365,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-28,237.52,244.64,237.01,242.11,6595724.823111,CRM,stock,Information Technology
 2026-10-29,230.16,233.9669,225.04,230.9,7687472.240184,CRM,stock,Information Technology
 2026-11-03,222.4,223.5,214.67,222.2,6709910.478359,CRM,stock,Information Technology
+2026-11-10,214.57,214.885,208.88,213.48,7877569.740002,CRM,stock,Information Technology
 2020-01-01,0.03362,0.03394,0.03329,0.03372,1924808.33,CROUSD,crypto,Crypto
 2020-01-02,0.03372,0.03267,0.03211,0.0326,1958724.18,CROUSD,crypto,Crypto
 2020-01-03,0.0326,0.03472,0.03413,0.03442,2528968.98,CROUSD,crypto,Crypto
@@ -78113,6 +78118,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-28,270.46,272.29,263.73,266.66,7562446.296493,CRWD,stock,Information Technology
 2026-10-29,254.335,268.6,250.1,261.15,9408488.445105,CRWD,stock,Information Technology
 2026-11-03,244.175,251.27,241.69,244.68,6358410.976191,CRWD,stock,Information Technology
+2026-11-10,224.72,230.42,218.41,225.76,6196859.865888,CRWD,stock,Information Technology
 2020-08-19,42.1,42.35,41.78,41.87,20097423.0,CSCO,stock,Information Technology
 2020-08-20,41.87,42.42,41.73,42.31,18443877.0,CSCO,stock,Information Technology
 2020-08-21,42.05,42.3,41.81,42.25,17289561.0,CSCO,stock,Information Technology
@@ -94174,6 +94180,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-27,123.69,124.88,122.93,123.65,1835065.0525,DLTR,stock,Consumer Staples
 2026-11-03,137.65,138.31,132.75,134.07,1810845.581427,DLTR,stock,Consumer Staples
 2026-11-09,133.0,138.61,132.0,137.23,2211211.998968,DLTR,stock,Consumer Staples
+2026-11-10,136.48,141.18,135.3,140.83,1840015.832154,DLTR,stock,Consumer Staples
 2020-01-01,0.00207,0.002143,0.002051,0.002124,9272495.56,DOGEUSD,crypto,Crypto
 2020-01-02,0.002124,0.002143,0.001904,0.002089,9880433.26,DOGEUSD,crypto,Crypto
 2020-01-03,0.002089,0.00213,0.002061,0.002109,9102487.45,DOGEUSD,crypto,Crypto
@@ -99949,6 +99956,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-28,309.28,312.0,305.0,309.45,630663.910618,DPZ,stock,Consumer Discretionary
 2026-11-03,320.52,324.14,317.34,323.09,489472.826414,DPZ,stock,Consumer Discretionary
 2026-11-09,334.28,336.75,331.37,334.18,754326.054303,DPZ,stock,Consumer Discretionary
+2026-11-10,333.445,333.8,328.21,330.06,667720.62523,DPZ,stock,Consumer Discretionary
 2020-08-19,81.26,82.4799,79.411,79.87,3112762.0,DRI,stock,Consumer Discretionary
 2020-08-20,79.39,81.36,78.85,80.91,1193375.0,DRI,stock,Consumer Discretionary
 2020-08-21,81.31,83.47,80.9762,82.71,2122267.0,DRI,stock,Consumer Discretionary
@@ -101381,6 +101389,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-15,211.91,214.99,210.415,214.31,1108665.721984,DRI,stock,Consumer Discretionary
 2026-10-28,213.84,220.38,212.74,216.56,717342.06867,DRI,stock,Consumer Discretionary
 2026-11-03,222.04,223.24,218.16,219.39,798061.086327,DRI,stock,Consumer Discretionary
+2026-11-10,224.7,229.89,224.7,228.66,927259.812057,DRI,stock,Consumer Discretionary
 2020-08-19,142.28,143.62,141.07,141.86,1816572.0,EA,stock,Communication Services
 2020-08-20,141.62,143.96,141.05,143.48,1268149.0,EA,stock,Communication Services
 2020-08-21,142.76,142.99,140.84,141.21,1940008.0,EA,stock,Communication Services
@@ -128918,6 +128927,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-27,58.45,58.45,56.98,57.43,686640.234323,FOX,stock,Communication Services
 2026-10-29,56.68,57.395,56.48,57.25,669368.938914,FOX,stock,Communication Services
 2026-11-09,59.85,62.47,59.47,60.51,1046913.87398,FOX,stock,Communication Services
+2026-11-10,59.91,60.42,58.745,60.25,2002049.560145,FOX,stock,Communication Services
 2020-08-19,25.6,26.15,25.59,25.85,3437623.0,FOXA,stock,Communication Services
 2020-08-20,25.71,26.02,25.51,25.89,4718990.0,FOXA,stock,Communication Services
 2020-08-21,25.82,26.05,25.57,26.0,3016589.0,FOXA,stock,Communication Services
@@ -130390,6 +130400,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-27,65.19,65.31,64.015,64.53,4840729.055977,FOXA,stock,Communication Services
 2026-10-29,63.31,64.635,63.31,64.51,5248282.948655,FOXA,stock,Communication Services
 2026-11-09,67.075,70.07,66.53,67.69,8355136.389036,FOXA,stock,Communication Services
+2026-11-10,67.15,67.6,65.76,67.37,46942836.027805,FOXA,stock,Communication Services
 2020-08-19,74.59,77.5,74.53,75.85,1412577.0,FSLR,stock,Information Technology
 2020-08-20,74.94,75.6,73.43,73.66,1116696.0,FSLR,stock,Information Technology
 2020-08-21,73.93,74.9033,73.33,74.1,748882.0,FSLR,stock,Information Technology
@@ -131855,6 +131866,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-29,176.0,179.0,173.89,176.89,2179068.387948,FSLR,stock,Information Technology
 2026-11-03,184.465,188.68,181.0975,185.9,3493360.489919,FSLR,stock,Information Technology
 2026-11-09,198.01,198.01,187.09,191.61,4516999.634875,FSLR,stock,Information Technology
+2026-11-10,187.6,189.16,178.45,180.98,3891371.99564,FSLR,stock,Information Technology
 2020-08-19,25.85,26.152,25.5202,25.902,6680295.0,FTNT,stock,Information Technology
 2020-08-20,26.086,26.788,25.75,26.718,4611290.0,FTNT,stock,Information Technology
 2020-08-21,26.766,26.862,26.184,26.342,4004205.0,FTNT,stock,Information Technology
@@ -133313,6 +133325,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-11-03,128.2,130.7599,126.865,128.11,5974519.354238,FTNT,stock,Information Technology
 2026-11-05,127.695,127.695,121.855,122.51,7541393.9314,FTNT,stock,Information Technology
 2026-11-09,119.65,123.3,119.485,122.47,5316437.36611,FTNT,stock,Information Technology
+2026-11-10,122.498,124.83,119.6501,123.57,5599615.320419,FTNT,stock,Information Technology
 2023-06-13,0.8565,0.8584,0.8421,0.8466,697962.1,FTNUSD,crypto,Crypto
 2023-06-14,0.8466,0.8502,0.842,0.8491,911255.57,FTNUSD,crypto,Crypto
 2023-06-15,0.8491,0.8611,0.8409,0.8546,944933.84,FTNUSD,crypto,Crypto
@@ -154789,6 +154802,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-20,313.48,317.71,310.64,315.11,4016988.20848,HD,stock,Consumer Discretionary
 2026-11-03,337.25,338.78,330.71,333.66,3801379.204131,HD,stock,Consumer Discretionary
 2026-11-09,346.78,356.9,346.78,353.42,5176812.673952,HD,stock,Consumer Discretionary
+2026-11-10,349.5,352.65,347.92,351.0,3744788.731367,HD,stock,Consumer Discretionary
 2020-08-19,84.6,85.4,83.88,84.49,2025558.0,HLT,stock,Consumer Discretionary
 2020-08-20,83.47,85.71,83.12,85.1,2285280.0,HLT,stock,Consumer Discretionary
 2020-08-21,85.5,87.44,85.16,87.35,2372782.0,HLT,stock,Consumer Discretionary
@@ -156263,6 +156277,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-15,332.05,344.46,331.825,342.98,1880737.790942,HLT,stock,Consumer Discretionary
 2026-11-03,363.88,366.45,362.72,363.83,1363890.997944,HLT,stock,Consumer Discretionary
 2026-11-09,375.11,377.0,371.495,373.23,2536611.518036,HLT,stock,Consumer Discretionary
+2026-11-10,375.26,379.935,369.66,379.76,1803982.087283,HLT,stock,Consumer Discretionary
 2020-08-19,9.51,9.635,9.4,9.42,5091788.0,HPE,stock,Information Technology
 2020-08-20,9.33,9.38,9.21,9.26,7090273.0,HPE,stock,Information Technology
 2020-08-21,9.24,9.36,9.12,9.33,8716884.0,HPE,stock,Information Technology
@@ -157727,6 +157742,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-28,62.01,62.2,60.05,60.33,10479852.805305,HPE,stock,Information Technology
 2026-11-04,52.56,52.98,49.16,50.09,21061920.713389,HPE,stock,Information Technology
 2026-11-09,45.95,48.8,45.4004,47.54,13261356.756542,HPE,stock,Information Technology
+2026-11-10,47.075,48.38,45.9,47.93,13872529.162626,HPE,stock,Information Technology
 2020-08-19,18.3,18.49,18.09,18.14,6253021.0,HPQ,stock,Information Technology
 2020-08-20,18.0,18.215,17.97,18.15,5923950.0,HPQ,stock,Information Technology
 2020-08-21,18.11,18.3,17.95,18.23,7771702.0,HPQ,stock,Information Technology
@@ -183478,6 +183494,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-20,34.56,34.885,34.25,34.63,18647069.6092,KDP,stock,Consumer Staples
 2026-11-05,37.21,37.885,36.755,36.89,23228257.7857,KDP,stock,Consumer Staples
 2026-11-09,36.7,37.02,36.27,36.94,15375178.270118,KDP,stock,Consumer Staples
+2026-11-10,37.378,37.835,36.675,37.59,16963585.614377,KDP,stock,Consumer Staples
 2020-08-19,103.0,105.65,102.49,104.0,2542384.0,KEYS,stock,Information Technology
 2020-08-20,103.42,103.99,101.7,102.82,2643556.0,KEYS,stock,Information Technology
 2020-08-21,105.62,106.385,95.11,95.88,9409666.0,KEYS,stock,Information Technology
@@ -184954,6 +184971,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-15,344.08,344.81,323.07,342.08,1765136.943528,KEYS,stock,Information Technology
 2026-11-05,277.5,277.5,257.93,260.61,2106528.59916,KEYS,stock,Information Technology
 2026-11-09,278.5,292.065,275.765,288.97,1192879.618376,KEYS,stock,Information Technology
+2026-11-10,286.58,295.44,285.0,291.46,1256656.881306,KEYS,stock,Information Technology
 2020-08-19,35.75,35.87,35.38,35.43,4002542.0,KHC,stock,Consumer Staples
 2020-08-20,35.26,35.31,34.73,34.85,4553585.0,KHC,stock,Consumer Staples
 2020-08-21,34.77,34.9,34.3167,34.56,4749803.0,KHC,stock,Consumer Staples
@@ -186425,6 +186443,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-15,23.22,23.635,23.14,23.28,17116095.476593,KHC,stock,Consumer Staples
 2026-11-05,25.63,25.63,25.025,25.32,18929685.935051,KHC,stock,Consumer Staples
 2026-11-09,24.46,24.685,24.0701,24.42,12084120.540354,KHC,stock,Consumer Staples
+2026-11-10,24.36,24.65,23.95,24.24,11173360.724082,KHC,stock,Consumer Staples
 2020-08-19,212.71,212.719,209.49,210.54,734320.0,KLAC,stock,Information Technology
 2020-08-20,206.6,208.8325,205.08,206.85,915264.0,KLAC,stock,Information Technology
 2020-08-21,206.75,206.87,202.1132,203.97,1425883.0,KLAC,stock,Information Technology
@@ -187883,6 +187902,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-15,174.5,175.43,168.42,174.46,13699929.40135,KLAC,stock,Information Technology
 2026-11-05,141.93,142.84,128.165,129.8,34579292.403609,KLAC,stock,Information Technology
 2026-11-09,141.955,152.95,141.51,151.38,21538003.804109,KLAC,stock,Information Technology
+2026-11-10,148.91,154.68,148.06,152.99,11418630.760336,KLAC,stock,Information Technology
 2020-08-19,157.95,158.43,157.03,157.35,1079103.0,KMB,stock,Consumer Staples
 2020-08-20,157.0,157.91,156.35,157.57,760213.0,KMB,stock,Consumer Staples
 2020-08-21,157.38,157.62,156.14,157.3,1422374.0,KMB,stock,Consumer Staples
@@ -209522,6 +209542,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-07,92.75,93.24,90.56,91.88,4480341.129338,LULU,stock,Consumer Discretionary
 2026-10-15,95.295,100.4,95.09,99.09,4772406.102067,LULU,stock,Consumer Discretionary
 2026-10-27,102.62,104.96,102.195,104.59,3525937.329747,LULU,stock,Consumer Discretionary
+2026-11-10,110.605,111.1,108.08,110.37,2154727.316423,LULU,stock,Consumer Discretionary
 2020-08-19,48.15,48.48,47.22,47.47,3649708.0,LVS,stock,Consumer Discretionary
 2020-08-20,46.91,47.79,46.62,47.46,2941788.0,LVS,stock,Consumer Discretionary
 2020-08-21,48.15,49.37,47.86,48.52,6789965.0,LVS,stock,Consumer Discretionary
@@ -210995,6 +211016,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-11-04,39.41,40.97,39.4,40.74,8515143.523102,LVS,stock,Consumer Discretionary
 2026-11-05,41.22,41.63,40.2,40.92,9256829.988485,LVS,stock,Consumer Discretionary
 2026-11-09,41.01,41.73,40.17,40.18,7122266.82654,LVS,stock,Consumer Discretionary
+2026-11-10,40.425,40.955,39.99,40.82,4985715.097066,LVS,stock,Consumer Discretionary
 2020-08-19,63.4,64.74,63.02,64.06,787056.0,LW,stock,Consumer Staples
 2020-08-20,63.17,63.7,62.15,62.34,664931.0,LW,stock,Consumer Staples
 2020-08-21,62.39,62.56,61.3,61.48,697168.0,LW,stock,Consumer Staples
@@ -212468,6 +212490,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-11-04,55.87,56.88,55.54,56.6,2052985.726771,LW,stock,Consumer Staples
 2026-11-05,56.6,56.96,54.32,55.08,1946372.501223,LW,stock,Consumer Staples
 2026-11-09,55.51,57.2,54.825,57.16,1997185.586092,LW,stock,Consumer Staples
+2026-11-10,56.9,57.62,55.91,57.11,1632955.34782,LW,stock,Consumer Staples
 2020-08-19,50.62,52.0,50.44,51.56,1785938.0,LYV,stock,Communication Services
 2020-08-20,50.75,51.76,50.5,51.55,1507264.0,LYV,stock,Communication Services
 2020-08-21,51.48,52.6396,51.02,51.12,1554435.0,LYV,stock,Communication Services
@@ -231557,6 +231580,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-09-29,68.35,68.92,67.97,68.72,6868120.835576,MO,stock,Consumer Staples
 2026-10-05,67.135,68.0299,65.78,67.88,9270992.240156,MO,stock,Consumer Staples
 2026-11-04,77.69,78.57,77.13,78.01,8876109.77297,MO,stock,Consumer Staples
+2026-11-10,76.32,76.71,75.71,76.34,6455590.711727,MO,stock,Consumer Staples
 2024-12-13,2.695,2.984,2.686,2.966,3236427.46,MORPHOUSD,crypto,Crypto
 2024-12-14,2.966,3.196,2.64,2.68,12043216.95,MORPHOUSD,crypto,Crypto
 2024-12-15,2.68,2.878,2.538,2.825,10119623.69,MORPHOUSD,crypto,Crypto
@@ -233462,6 +233486,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-15,1198.15,1260.24,1195.0,1249.2,991558.829279,MPWR,stock,Information Technology
 2026-10-26,1141.84,1178.3825,1135.18,1167.27,921173.929537,MPWR,stock,Information Technology
 2026-11-04,1335.1,1337.91,1213.5,1261.08,1233477.130408,MPWR,stock,Information Technology
+2026-11-10,1365.5,1387.865,1290.0,1357.6,1077009.780702,MPWR,stock,Information Technology
 2020-08-19,211.49,212.1,209.25,209.7,27627561.0,MSFT,stock,Information Technology
 2020-08-20,209.54,215.0,208.91,214.58,26981478.0,MSFT,stock,Information Technology
 2020-08-21,213.86,216.25,212.85,213.02,36249319.0,MSFT,stock,Information Technology
@@ -234927,6 +234952,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-15,533.315,541.1331,531.22,539.44,24151211.130548,MSFT,stock,Information Technology
 2026-11-04,543.695,559.15,542.3,555.8,50807828.53949,MSFT,stock,Information Technology
 2026-11-09,544.485,548.28,538.6996,545.18,25337411.004743,MSFT,stock,Information Technology
+2026-11-10,542.975,544.19,526.365,533.16,26940880.302679,MSFT,stock,Information Technology
 2020-08-19,150.0,151.49,149.53,150.46,1301629.0,MSI,stock,Information Technology
 2020-08-20,148.68,151.72,148.44,151.61,1078535.0,MSI,stock,Information Technology
 2020-08-21,151.15,152.04,150.3,151.92,824136.0,MSI,stock,Information Technology
@@ -236397,6 +236423,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-15,458.65,461.68,455.21,456.39,799312.254161,MSI,stock,Information Technology
 2026-10-29,488.5,493.5,483.47,492.08,1270590.532965,MSI,stock,Information Technology
 2026-11-09,515.24,529.67,511.08,527.97,1234093.611377,MSI,stock,Information Technology
+2026-11-10,530.31,530.31,521.13,527.38,1249017.351754,MSI,stock,Information Technology
 2020-08-19,114.82,118.465,113.94,114.15,4237690.0,MTCH,stock,Communication Services
 2020-08-20,113.99,115.53,112.16,113.08,1695367.0,MTCH,stock,Communication Services
 2020-08-21,113.54,114.7,112.405,112.55,2096436.0,MTCH,stock,Communication Services
@@ -274892,6 +274919,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-20,112.39,114.72,111.56,114.53,2357712.516884,PHM,stock,Consumer Discretionary
 2026-10-28,121.51,123.075,118.35,119.71,2233189.565609,PHM,stock,Consumer Discretionary
 2026-11-05,138.0,139.87,133.94,135.15,2589833.249463,PHM,stock,Consumer Discretionary
+2026-11-10,133.77,133.77,129.75,130.6,1822260.66258,PHM,stock,Consumer Discretionary
 2025-03-18,1.124,1.19,1.079,1.143,95249860.18,PIUSD,crypto,Crypto
 2025-03-19,1.143,1.218,1.122,1.17,178140196.7,PIUSD,crypto,Crypto
 2025-03-20,1.17,1.196,1.044,1.055,139782445.7,PIUSD,crypto,Crypto
@@ -276695,6 +276723,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-08,199.0,204.44,195.65,198.78,41865385.678748,PLTR,stock,Information Technology
 2026-10-22,200.76,202.63,194.535,196.19,22933627.61945,PLTR,stock,Information Technology
 2026-10-28,197.01,198.74,193.1306,196.81,20821251.212191,PLTR,stock,Information Technology
+2026-11-10,168.21,170.0,164.0,168.82,19588003.235606,PLTR,stock,Information Technology
 2020-08-19,79.33,79.77,78.59,78.7,4530662.0,PM,stock,Consumer Staples
 2020-08-20,78.36,78.78,78.01,78.22,2722037.0,PM,stock,Consumer Staples
 2020-08-21,78.31,78.59,77.39,78.06,3071239.0,PM,stock,Consumer Staples
@@ -278147,6 +278176,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-15,210.0,210.45,199.53,199.9,7965336.754571,PM,stock,Consumer Staples
 2026-10-22,197.04,201.89,197.0,201.74,5179776.391655,PM,stock,Consumer Staples
 2026-10-28,202.27,203.89,200.6,202.64,3338760.921188,PM,stock,Consumer Staples
+2026-11-10,195.83,196.34,193.75,194.25,5675476.1922,PM,stock,Consumer Staples
 2020-07-22,0.02645,0.02663,0.02528,0.02559,3945328.11,POLUSD,crypto,Crypto
 2020-07-23,0.02559,0.02628,0.02315,0.0247,6398785.1,POLUSD,crypto,Crypto
 2020-07-24,0.0247,0.0257,0.0243,0.02544,6132007.0,POLUSD,crypto,Crypto
@@ -281668,6 +281698,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-28,192.48,195.87,190.66,195.59,784521.189882,POOL,stock,Consumer Discretionary
 2026-10-29,196.52,204.15,196.01,204.12,611171.753609,POOL,stock,Consumer Discretionary
 2026-11-03,211.74,213.2,207.0,207.25,573822.359588,POOL,stock,Consumer Discretionary
+2026-11-10,218.63,218.63,213.02,217.54,456079.663995,POOL,stock,Consumer Discretionary
 2025-08-07,11.64,12.79,10.57,11.74,43107823.0,PSKY,stock,Communication Services
 2025-08-08,11.42,11.86,10.38,10.51,39967393.0,PSKY,stock,Communication Services
 2025-08-11,10.615,10.655,9.95,10.12,51349476.0,PSKY,stock,Communication Services
@@ -330618,6 +330649,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-11-04,141.5,146.69,140.0,144.76,6904345.07938,TJX,stock,Consumer Discretionary
 2026-11-05,146.16,146.73,138.455,138.59,10016229.124227,TJX,stock,Consumer Discretionary
 2026-11-09,137.22,138.37,136.0,138.13,6716545.314464,TJX,stock,Consumer Discretionary
+2026-11-10,136.93,138.5,136.075,136.92,6150135.89462,TJX,stock,Consumer Discretionary
 2023-09-12,102.0,103.98,100.0,103.05,617793.0,TKO,stock,Communication Services
 2023-09-13,104.5,104.5,100.0,101.0,1733567.0,TKO,stock,Communication Services
 2023-09-14,101.06,102.98,100.08,100.76,1160691.0,TKO,stock,Communication Services
@@ -331298,6 +331330,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-21,178.65,179.72,176.25,177.94,829387.389607,TKO,stock,Communication Services
 2026-10-26,172.75,174.045,170.18,171.23,1331488.073438,TKO,stock,Communication Services
 2026-11-03,184.47,187.785,182.96,187.2,1106437.652698,TKO,stock,Communication Services
+2026-11-10,196.71,199.445,192.64,199.22,1307147.587193,TKO,stock,Communication Services
 2020-08-19,116.69,116.93,114.92,115.14,2700447.0,TMUS,stock,Communication Services
 2020-08-20,114.56,115.86,114.51,115.4,2268754.0,TMUS,stock,Communication Services
 2020-08-21,114.34,115.25,113.3821,115.01,2841035.0,TMUS,stock,Communication Services
@@ -351701,6 +351734,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-11-04,640.64,664.29,640.64,660.7,432477.142387,ULTA,stock,Consumer Discretionary
 2026-11-05,668.0,674.04,643.5,649.8,621211.180331,ULTA,stock,Consumer Discretionary
 2026-11-09,653.66,672.7,649.82,665.13,525737.970566,ULTA,stock,Consumer Discretionary
+2026-11-10,664.34,668.5799,655.78,664.41,378081.355475,ULTA,stock,Consumer Discretionary
 2020-09-17,0.004457,4.31,0.004457,4.225,1911062.59,UNIUSD,crypto,Crypto
 2020-09-18,4.225,8.67,3.293,6.97,32939144.34,UNIUSD,crypto,Crypto
 2020-09-19,6.97,7.486,5.237,5.73,12374762.95,UNIUSD,crypto,Crypto
@@ -359044,6 +359078,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-11-03,308.835,317.41,305.54,313.88,2766384.605802,VRSN,stock,Information Technology
 2026-11-04,313.07,324.205,311.47,318.03,1446290.994814,VRSN,stock,Information Technology
 2026-11-09,310.07,311.2824,302.18,305.84,766081.095115,VRSN,stock,Information Technology
+2026-11-10,305.84,311.83,304.13,311.115,900111.378918,VRSN,stock,Information Technology
 2020-08-19,59.36,59.44,58.93,59.05,11023481.0,VZ,stock,Communication Services
 2020-08-20,58.6,59.09,58.59,58.96,8210214.0,VZ,stock,Communication Services
 2020-08-21,59.0,59.04,58.535,58.99,11774444.0,VZ,stock,Communication Services
@@ -360507,6 +360542,7 @@ date,open,high,low,close,volume,symbol,asset_type,sector
 2026-10-27,43.0,44.055,42.91,43.93,28190149.13694,VZ,stock,Communication Services
 2026-11-03,44.925,45.25,44.55,45.24,26725393.495162,VZ,stock,Communication Services
 2026-11-09,45.81,46.33,45.36,46.06,24055105.313521,VZ,stock,Communication Services
+2026-11-10,46.18,46.41,45.475,46.31,15623226.700083,VZ,stock,Communication Services
 2025-04-10,0.4761,0.4987,0.4571,0.4659,21952542.3,WALUSD,crypto,Crypto
 2025-04-11,0.4659,0.5055,0.4545,0.4885,38196685.26,WALUSD,crypto,Crypto
 2025-04-12,0.4885,0.5244,0.4689,0.5075,24916990.79,WALUSD,crypto,Crypto
